@@ -234,6 +234,7 @@ export default function Home() {
         const stackBottom = screenHeight - buttonAreaHeight;
 
         // Update falling flags - let them stack at the bottom
+        // First, process all flags to determine which ones are stacking
         const updated = prev.map((f) => {
           // Skip eliminated flags that aren't falling or exiting
           if (f.eliminated && !f.falling && !f.exiting) {
@@ -304,14 +305,15 @@ export default function Home() {
             
             // Check if this flag has reached the bottom
             if (newFallY >= stackBottom - flagSize) {
-              // Count how many flags have already reached the bottom (for row arrangement)
-              // Only count flags that are already stacked (have stacked: true)
-              const alreadyStacked = prev.filter(
+              // Get all already stacked flags
+              const alreadyStackedFlags = prev.filter(
                 (other) => 
                   other.stacked === true &&
                   other.eliminatedOrder !== undefined &&
                   other.eliminatedOrder < (f.eliminatedOrder || Infinity)
-              ).length;
+              );
+              
+              const alreadyStacked = alreadyStackedFlags.length;
               
               const screenWidth = window.innerWidth || containerWidth;
               const screenCenterX = screenWidth / 2;
@@ -326,23 +328,42 @@ export default function Home() {
               const rowIndex = Math.floor(alreadyStacked / maxFlagsPerRow);
               const positionInRow = alreadyStacked % maxFlagsPerRow;
               
+              // Count how many flags are actually in this row (including current flag)
+              const flagsInSameRow = alreadyStackedFlags.filter(
+                (other) => {
+                  const otherRowIndex = Math.floor((other.eliminatedOrder || 0) / maxFlagsPerRow);
+                  return otherRowIndex === rowIndex;
+                }
+              ).length + 1; // +1 for current flag
+              
+              // Use actual count for this row to center properly
+              const actualFlagsInRow = Math.min(flagsInSameRow, maxFlagsPerRow);
+              
               // Calculate Y position with consistent row height
               const rowHeight = flagSize * 0.95; // Slightly tighter vertical spacing
               const rowY = stackBottom - flagSize - (rowIndex * rowHeight);
               
-              // Calculate X position - evenly distributed grid layout
+              // Calculate X position - center flags based on actual count in row
+              // Ensure equal padding on both sides by calculating from screen edges
+              // Since we use translate(-50%, -50%), left position represents flag center
+              // Leftmost flag center should be: horizontalPadding + flagSize / 2
+              // Rightmost flag center should be: screenWidth - horizontalPadding - flagSize / 2
+              
               let rowX: number;
-              if (maxFlagsPerRow === 1) {
-                // Single column - center it
-                rowX = screenCenterX;
+              if (actualFlagsInRow === 1) {
+                // Single flag in row - center it perfectly
+                rowX = screenWidth / 2;
               } else {
-                // Multi-column grid - evenly distribute
-                const totalRowWidth = (maxFlagsPerRow - 1) * spacing;
-                const rowStartX = screenCenterX - (totalRowWidth / 2);
-                rowX = rowStartX + (positionInRow * spacing);
+                // Multiple flags - calculate positions to ensure equal padding
+                const leftmostFlagCenter = horizontalPadding + flagSize / 2;
+                const rightmostFlagCenter = screenWidth - horizontalPadding - flagSize / 2;
+                const totalRowWidth = rightmostFlagCenter - leftmostFlagCenter;
                 
-                // Ensure flags stay within screen boundaries
-                rowX = Math.max(horizontalPadding + flagSize / 2, Math.min(screenWidth - horizontalPadding - flagSize / 2, rowX));
+                // Calculate spacing between flag centers (evenly distribute)
+                const actualSpacing = totalRowWidth / (actualFlagsInRow - 1);
+                
+                // Position flag within the row
+                rowX = leftmostFlagCenter + (positionInRow * actualSpacing);
               }
               
               // Keep opacity visible and consistent
@@ -732,8 +753,72 @@ export default function Home() {
           return f;
         });
         
+        // Recalculate positions for all stacked flags to ensure proper centering
+        // Group flags by row and recalculate their positions
+        // Reuse existing variables (screenHeight, isMobile, buttonAreaHeight, stackBottom are already defined above)
+        const recalcScreenWidth = window.innerWidth || (containerEl ? containerEl.offsetWidth : 0);
+        const recalcScreenCenterX = recalcScreenWidth / 2;
+        const recalcHorizontalPadding = Math.max(20, flagSize * 0.5);
+        const recalcAvailableWidth = recalcScreenWidth - (recalcHorizontalPadding * 2);
+        const recalcSpacing = flagSize * 1.15;
+        const recalcMaxFlagsPerRow = Math.max(1, Math.floor(recalcAvailableWidth / recalcSpacing));
+        
+        // Group stacked flags by row
+        const flagsByRow = new Map<number, typeof finalFlags>();
+        finalFlags.forEach((f) => {
+          if (f.stacked && f.eliminatedOrder !== undefined) {
+            const rowIndex = Math.floor((f.eliminatedOrder - 1) / recalcMaxFlagsPerRow);
+            if (!flagsByRow.has(rowIndex)) {
+              flagsByRow.set(rowIndex, []);
+            }
+            flagsByRow.get(rowIndex)!.push(f);
+          }
+        });
+        
+        // Recalculate positions for each row to ensure proper centering
+        const recalculatedFlags = finalFlags.map((f) => {
+          if (f.stacked && f.eliminatedOrder !== undefined) {
+            const rowIndex = Math.floor((f.eliminatedOrder - 1) / recalcMaxFlagsPerRow);
+            const rowFlags = flagsByRow.get(rowIndex) || [];
+            const sortedRowFlags = [...rowFlags].sort((a, b) => (a.eliminatedOrder || 0) - (b.eliminatedOrder || 0));
+            const positionInRow = sortedRowFlags.findIndex((flag) => flag.eliminatedOrder === f.eliminatedOrder);
+            const actualFlagsInRow = sortedRowFlags.length;
+            
+            if (positionInRow >= 0) {
+              const rowHeight = flagSize * 0.95;
+              const rowY = stackBottom - flagSize - (rowIndex * rowHeight);
+              
+              // Ensure equal padding on both sides by calculating from screen edges
+              // Since we use translate(-50%, -50%), left position represents flag center
+              let rowX: number;
+              if (actualFlagsInRow === 1) {
+                // Single flag in row - center it perfectly
+                rowX = recalcScreenWidth / 2;
+              } else {
+                // Multiple flags - calculate positions to ensure equal padding
+                const leftmostFlagCenter = recalcHorizontalPadding + flagSize / 2;
+                const rightmostFlagCenter = recalcScreenWidth - recalcHorizontalPadding - flagSize / 2;
+                const totalRowWidth = rightmostFlagCenter - leftmostFlagCenter;
+                
+                // Calculate spacing between flag centers (evenly distribute)
+                const actualSpacing = totalRowWidth / (actualFlagsInRow - 1);
+                
+                // Position flag within the row
+                rowX = leftmostFlagCenter + (positionInRow * actualSpacing);
+              }
+              
+              return {
+                ...f,
+                fallX: rowX,
+                fallY: rowY,
+              };
+            }
+          }
+          return f;
+        });
+        
         // Count active flags (not eliminated, not falling, not exiting) after processing eliminations
-        const active = finalFlags.filter((f) => !f.eliminated && !f.falling && !f.exiting);
+        const active = recalculatedFlags.filter((f) => !f.eliminated && !f.falling && !f.exiting);
         const prevActiveCount = prev.filter((f) => !f.eliminated && !f.falling && !f.exiting).length;
         
         // Show modal when 2nd-to-last flag is eliminated (when going from 2 to 1)
@@ -741,16 +826,16 @@ export default function Home() {
           setWinner(active[0].country);
           setWinnerModalOpen(true);
           setGameState("finished");
-          return finalFlags;
+          return recalculatedFlags;
         }
         
         // Also handle edge case when game ends with 0 flags
         if (active.length === 0 && prevActiveCount > 0) {
           setGameState("finished");
-          return finalFlags;
+          return recalculatedFlags;
         }
 
-        return finalFlags;
+        return recalculatedFlags;
       });
 
       rafRef.current = requestAnimationFrame(loop);
