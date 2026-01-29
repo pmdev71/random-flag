@@ -41,11 +41,20 @@ interface BouncingFlag {
   vy: number;
   eliminated: boolean;
   eliminatedOrder?: number;
+  exiting?: boolean;
+  exitStartTime?: number;
+  exitX?: number;
+  exitY?: number;
+  exitVelocityX?: number;
+  exitVelocityY?: number;
   falling?: boolean;
   fallY?: number;
   fallX?: number;
   fallOpacity?: number;
   fallStartTime?: number;
+  fallRotation?: number;
+  fallVelocity?: number;
+  fallDriftX?: number;
   stacked?: boolean;
 }
 
@@ -210,8 +219,11 @@ export default function Home() {
       setFlags((prev) => {
         const containerEl = containerRef.current;
         const containerHeight = containerEl ? containerEl.offsetHeight : 0;
-        const FALL_SPEED = 0.15; // pixels per millisecond - slower fall speed
-        const FADE_SPEED = 0.002; // opacity per millisecond
+        const GRAVITY = 0.0005; // Acceleration per millisecond squared
+        const INITIAL_FALL_VELOCITY = 0.1; // Initial fall velocity (pixels per millisecond)
+        const MAX_FALL_VELOCITY = 1.2; // Maximum fall velocity
+        const ROTATION_SPEED = 0.15; // Rotation speed (degrees per millisecond)
+        const FADE_SPEED = 0.0015; // opacity per millisecond
 
         // Calculate stack bottom position - above the button area
         const screenHeight = window.innerHeight || containerHeight;
@@ -223,8 +235,38 @@ export default function Home() {
 
         // Update falling flags - let them stack at the bottom
         const updated = prev.map((f) => {
-          // Skip eliminated flags that aren't falling
-          if (f.eliminated && !f.falling) {
+          // Skip eliminated flags that aren't falling or exiting
+          if (f.eliminated && !f.falling && !f.exiting) {
+            return f;
+          }
+          
+          // Handle exit animation (flag smoothly exits through gap before falling)
+          if (f.exiting && f.exitStartTime !== undefined && f.exitX !== undefined && f.exitY !== undefined) {
+            const exitDuration = 300; // Exit animation duration (300ms)
+            const elapsed = time - f.exitStartTime;
+            const progress = Math.min(elapsed / exitDuration, 1);
+            
+            if (progress >= 1) {
+              // Exit complete - transition to falling
+              // Calculate final exit position with velocity
+              const finalExitX = f.exitX + (f.exitVelocityX || 0) * exitDuration * 0.001;
+              const finalExitY = f.exitY + (f.exitVelocityY || 0) * exitDuration * 0.001;
+              
+              return {
+                ...f,
+                exiting: false,
+                falling: true,
+                fallX: finalExitX,
+                fallY: finalExitY,
+                fallOpacity: 1,
+                fallStartTime: performance.now(),
+                fallRotation: (Math.random() - 0.5) * 15, // Random initial rotation
+                fallVelocity: INITIAL_FALL_VELOCITY,
+                fallDriftX: (f.exitVelocityX || 0) * 0.01, // Use exit velocity for drift
+              };
+            }
+            
+            // Still exiting - keep flag in exiting state (rendering handled separately)
             return f;
           }
           
@@ -237,8 +279,26 @@ export default function Home() {
               };
             }
             
-            // Calculate new fall position
-            const newFallY = f.fallY + dt * FALL_SPEED;
+            // Calculate fall physics with acceleration (gravity)
+            const fallStartTime = f.fallStartTime || time;
+            const fallDuration = time - fallStartTime;
+            
+            // Calculate velocity with acceleration (v = v0 + at)
+            let currentVelocity = (f.fallVelocity !== undefined ? f.fallVelocity : INITIAL_FALL_VELOCITY) + GRAVITY * fallDuration;
+            currentVelocity = Math.min(currentVelocity, MAX_FALL_VELOCITY); // Cap at max velocity
+            
+            // Calculate new fall position with acceleration (s = v0*t + 0.5*a*t^2)
+            const fallDistance = (f.fallVelocity !== undefined ? f.fallVelocity : INITIAL_FALL_VELOCITY) * dt + 0.5 * GRAVITY * dt * dt;
+            const newFallY = f.fallY + fallDistance;
+            
+            // Calculate rotation (tumbling effect)
+            const newRotation = (f.fallRotation !== undefined ? f.fallRotation : 0) + ROTATION_SPEED * dt * currentVelocity;
+            
+            // Add slight horizontal drift (air resistance effect)
+            const driftSpeed = 0.02 * currentVelocity; // Drift increases with fall speed
+            const driftDirection = f.fallDriftX !== undefined ? (f.fallDriftX > 0 ? 1 : -1) : (Math.random() > 0.5 ? 1 : -1);
+            const newDriftX = (f.fallDriftX !== undefined ? f.fallDriftX : driftDirection * 0.5) + driftSpeed * dt * driftDirection * (Math.random() - 0.5);
+            
             const containerWidth = containerEl ? containerEl.offsetWidth : 0;
             const containerLeft = containerEl ? containerEl.getBoundingClientRect().left + window.scrollX : 0;
             
@@ -253,57 +313,63 @@ export default function Home() {
                   other.eliminatedOrder < (f.eliminatedOrder || Infinity)
               ).length;
               
-              // Center all flags horizontally at the bottom of the screen
-              const spacing = flagSize * 1.1; // Gap between flag centers (10% more than flag size for visible gap)
               const screenWidth = window.innerWidth || containerWidth;
               const screenCenterX = screenWidth / 2;
               
-              // Calculate max flags per row based on available screen space
-              const availableSpacePerSide = (screenWidth / 2) - (flagSize / 2);
-              const maxFlagsPerSide = Math.floor(availableSpacePerSide / spacing);
-              const maxFlagsPerRow = Math.max(1, maxFlagsPerSide * 2 + 1); // +1 for center flag
-              const rowIndex = Math.floor(alreadyStacked / maxFlagsPerRow); // Which row (0 = bottom)
-              const positionInRow = alreadyStacked % maxFlagsPerRow; // Position within current row
+              // Professional grid layout with better spacing
+              const horizontalPadding = Math.max(20, flagSize * 0.5); // Padding from screen edges
+              const availableWidth = screenWidth - (horizontalPadding * 2);
+              const spacing = flagSize * 1.15; // Slightly more spacing for cleaner look
+              const maxFlagsPerRow = Math.max(1, Math.floor(availableWidth / spacing));
               
-              // Calculate Y position (bottom row is at stackBottom, rows go up)
-              const rowY = stackBottom - flagSize - (rowIndex * flagSize * 0.9);
+              // Calculate row and position
+              const rowIndex = Math.floor(alreadyStacked / maxFlagsPerRow);
+              const positionInRow = alreadyStacked % maxFlagsPerRow;
               
-              // Calculate X position - centered arrangement
-              // Since we use translate(-50%, -50%), the left position represents the center of the element
+              // Calculate Y position with consistent row height
+              const rowHeight = flagSize * 0.95; // Slightly tighter vertical spacing
+              const rowY = stackBottom - flagSize - (rowIndex * rowHeight);
+              
+              // Calculate X position - evenly distributed grid layout
               let rowX: number;
-              if (positionInRow === 0) {
-                // First flag in row: center
+              if (maxFlagsPerRow === 1) {
+                // Single column - center it
                 rowX = screenCenterX;
               } else {
-                // Arrange flags centered: alternate left and right from center
-                const isRight = positionInRow % 2 === 1;
-                const step = Math.floor((positionInRow + 1) / 2); // Calculate step: 1, 1, 2, 2, 3, 3, ...
-                const offset = isRight ? step * spacing : -step * spacing;
-                rowX = screenCenterX + offset;
+                // Multi-column grid - evenly distribute
+                const totalRowWidth = (maxFlagsPerRow - 1) * spacing;
+                const rowStartX = screenCenterX - (totalRowWidth / 2);
+                rowX = rowStartX + (positionInRow * spacing);
                 
-                // Ensure flag stays within screen boundaries (with padding)
-                const padding = flagSize / 2;
-                rowX = Math.max(padding, Math.min(screenWidth - padding, rowX));
+                // Ensure flags stay within screen boundaries
+                rowX = Math.max(horizontalPadding + flagSize / 2, Math.min(screenWidth - horizontalPadding - flagSize / 2, rowX));
               }
               
-              // Keep opacity visible (don't fade completely)
-              const finalOpacity = Math.max(0.7, f.fallOpacity);
+              // Keep opacity visible and consistent
+              const finalOpacity = Math.max(0.75, f.fallOpacity);
               
               return {
                 ...f,
                 fallY: rowY,
                 fallX: rowX,
                 fallOpacity: finalOpacity,
+                fallRotation: 0, // Reset rotation when stacked for clean alignment
                 stacked: true, // Mark as stacked - position is now fixed
               };
             }
             
-            // Still falling - continue animation with slower fade
-            const newOpacity = Math.max(0.8, f.fallOpacity - dt * FADE_SPEED * 0.3);
+            // Still falling - continue animation with physics
+            // Fade opacity gradually, but slower as it falls faster
+            const fadeMultiplier = Math.max(0.3, 1 - (currentVelocity / MAX_FALL_VELOCITY) * 0.5);
+            const newOpacity = Math.max(0.8, f.fallOpacity - dt * FADE_SPEED * fadeMultiplier);
+            
             return {
               ...f,
               fallY: newFallY,
               fallOpacity: newOpacity,
+              fallRotation: newRotation,
+              fallVelocity: currentVelocity,
+              fallDriftX: newDriftX,
             };
           }
           return f;
@@ -389,9 +455,9 @@ export default function Home() {
               const currentGapRotation = gapRotationEnabled ? gapRotationRef.current : 0;
               const intersectDist = Math.sqrt(intersectX * intersectX + intersectY * intersectY);
               
-              // If passing through gap and at boundary, eliminate immediately
+              // If passing through gap and at boundary, start exit animation
               if (isInGap(intersectAngle, currentGapRotation, gapSize) && intersectDist >= maxFlagCenterDistance * 0.98) {
-                // Flag is exiting through gap - eliminate it
+                // Flag is exiting through gap - start professional exit animation
                 if (!eliminatedSetRef.current.has(f.country.code)) {
                   eliminatedOrderRef.current += 1;
                   eliminatedSetRef.current.add(f.country.code);
@@ -399,19 +465,29 @@ export default function Home() {
                 }
                 const containerRect = containerEl ? containerEl.getBoundingClientRect() : null;
                 const containerLeft = containerRect ? containerRect.left + window.scrollX : 0;
-                const fallStartX = containerLeft + containerWidthForCollision * (cx + intersectX * scale);
-                const fallStartY = containerHeightForCollision * (cy + intersectY * scale);
+                const containerTop = containerRect ? containerRect.top + window.scrollY : 0;
+                const exitX = containerLeft + containerWidthForCollision * (cx + intersectX * scale);
+                const exitY = containerTop + containerHeightForCollision * (cy + intersectY * scale);
+                
+                // Calculate exit velocity based on flag's current velocity (maintain momentum)
+                // Convert logical velocity to pixel velocity
+                const exitSpeed = Math.sqrt(f.vx * f.vx + f.vy * f.vy) * BASE_SPEED * 60; // pixels per frame
+                const exitAngle = Math.atan2(intersectY, intersectX); // Direction from center
+                const exitVelocityX = Math.cos(exitAngle) * exitSpeed * containerWidthForCollision * scale * 0.5; // pixels per ms
+                const exitVelocityY = Math.sin(exitAngle) * exitSpeed * containerHeightForCollision * scale * 0.5; // pixels per ms
+                
                 return {
                   ...f,
                   eliminated: true,
                   eliminatedOrder: eliminatedOrderRef.current,
-                  falling: true,
+                  exiting: true,
+                  exitStartTime: performance.now(),
+                  exitX: exitX,
+                  exitY: exitY,
+                  exitVelocityX: exitVelocityX,
+                  exitVelocityY: exitVelocityY,
                   x: intersectX,
                   y: intersectY,
-                  fallX: fallStartX,
-                  fallY: fallStartY,
-                  fallOpacity: 1,
-                  fallStartTime: performance.now(),
                 };
               } else if (!isInGap(intersectAngle, currentGapRotation, gapSize)) {
                 // Flag hit wall - clamp to maxFlagCenterDistance (not radius)
@@ -494,32 +570,42 @@ export default function Home() {
           const currentGapRotation = gapRotationEnabled ? gapRotationRef.current : 0;
           const isInGapArea = isInGap(angle, currentGapRotation, gapSize);
           
-          // If flag is in gap area and is at or near the boundary, eliminate it immediately
+          // If flag is in gap area and is at or near the boundary, start exit animation
           // Use a slightly larger threshold to catch flags that are very close to the boundary
           const eliminationThreshold = maxFlagCenterDistance * 1.02; // 2% tolerance
           if (isInGapArea && dist >= maxFlagCenterDistance * 0.98) {
-            // Flag exits through gap - eliminate it
+            // Flag exits through gap - start professional exit animation
             if (!eliminatedSetRef.current.has(f.country.code)) {
               eliminatedOrderRef.current += 1;
               eliminatedSetRef.current.add(f.country.code);
               setEliminatedList((list) => [...list, f.country]);
             }
-            // Convert logical position to pixel position for fall animation
+            // Convert logical position to pixel position for exit animation
             const containerRect = containerEl ? containerEl.getBoundingClientRect() : null;
             const containerLeft = containerRect ? containerRect.left + window.scrollX : 0;
-            const fallStartX = containerLeft + containerWidthForCollision * (cx + x * scale);
-            const fallStartY = containerHeightForCollision * (cy + y * scale);
+            const containerTop = containerRect ? containerRect.top + window.scrollY : 0;
+            const exitX = containerLeft + containerWidthForCollision * (cx + x * scale);
+            const exitY = containerTop + containerHeightForCollision * (cy + y * scale);
+            
+            // Calculate exit velocity based on flag's current velocity (maintain momentum)
+            // Convert logical velocity to pixel velocity
+            const exitSpeed = Math.sqrt(f.vx * f.vx + f.vy * f.vy) * BASE_SPEED * 60; // pixels per frame
+            const exitAngle = Math.atan2(y, x); // Direction from center
+            const exitVelocityX = Math.cos(exitAngle) * exitSpeed * containerWidthForCollision * scale * 0.5; // pixels per ms
+            const exitVelocityY = Math.sin(exitAngle) * exitSpeed * containerHeightForCollision * scale * 0.5; // pixels per ms
+            
             return {
               ...f,
               eliminated: true,
               eliminatedOrder: eliminatedOrderRef.current,
-              falling: true,
+              exiting: true,
+              exitStartTime: performance.now(),
+              exitX: exitX,
+              exitY: exitY,
+              exitVelocityX: exitVelocityX,
+              exitVelocityY: exitVelocityY,
               x: x,
               y: y,
-              fallX: fallStartX,
-              fallY: fallStartY,
-              fallOpacity: 1,
-              fallStartTime: performance.now(),
             };
           }
           
@@ -576,25 +662,95 @@ export default function Home() {
           return { ...f, x, y };
         });
 
-        // Count active flags (not eliminated, not falling) after processing eliminations
-        const active = next.filter((f) => !f.eliminated && !f.falling);
-        const prevActiveCount = prev.filter((f) => !f.eliminated && !f.falling).length;
+        // Flag-to-flag collision detection and response
+        // Check each flag against all other flags for collisions
+        const finalFlags = next.map((f, i) => {
+          // Skip eliminated or falling flags
+          if (f.eliminated || f.falling) return f;
+          
+          let newVx = f.vx;
+          let newVy = f.vy;
+          let newX = f.x;
+          let newY = f.y;
+          let collided = false;
+          
+          // Check collision with all other flags
+          for (let j = 0; j < next.length; j++) {
+            if (i === j) continue; // Skip self
+            const other = next[j];
+            
+            // Skip eliminated or falling flags
+            if (other.eliminated || other.falling) continue;
+            
+            // Calculate distance between flag centers
+            const dx = f.x - other.x;
+            const dy = f.y - other.y;
+            const distance = Math.sqrt(dx * dx + dy * dy);
+            
+            // Collision occurs when distance is less than flag diameter (2 * flagRadiusLogical)
+            const minDistance = flagSizeLogical * 0.9; // Slightly less than diameter for better collision feel
+            if (distance < minDistance && distance > 0.001) {
+              // Collision detected - calculate collision response
+              collided = true;
+              
+              // Normalize collision vector
+              const nx = dx / distance;
+              const ny = dy / distance;
+              
+              // Relative velocity
+              const relativeVx = f.vx - other.vx;
+              const relativeVy = f.vy - other.vy;
+              
+              // Relative velocity along collision normal
+              const relativeSpeed = relativeVx * nx + relativeVy * ny;
+              
+              // Only resolve collision if flags are moving towards each other
+              if (relativeSpeed < 0) {
+                // Elastic collision response
+                // Exchange momentum along collision normal
+                const impulse = 2 * relativeSpeed / 2; // Divide by 2 because both flags have same mass
+                
+                // Update velocities
+                newVx = f.vx - impulse * nx;
+                newVy = f.vy - impulse * ny;
+                
+                // Separate flags to prevent overlap
+                const overlap = minDistance - distance;
+                const separationX = nx * overlap * 0.5;
+                const separationY = ny * overlap * 0.5;
+                newX = f.x + separationX;
+                newY = f.y + separationY;
+              }
+            }
+          }
+          
+          // Return updated flag with new velocity and position if collision occurred
+          if (collided) {
+            return { ...f, x: newX, y: newY, vx: newVx, vy: newVy };
+          }
+          
+          return f;
+        });
+        
+        // Count active flags (not eliminated, not falling, not exiting) after processing eliminations
+        const active = finalFlags.filter((f) => !f.eliminated && !f.falling && !f.exiting);
+        const prevActiveCount = prev.filter((f) => !f.eliminated && !f.falling && !f.exiting).length;
         
         // Show modal when 2nd-to-last flag is eliminated (when going from 2 to 1)
         if (active.length === 1 && prevActiveCount === 2) {
           setWinner(active[0].country);
           setWinnerModalOpen(true);
           setGameState("finished");
-          return next;
+          return finalFlags;
         }
         
         // Also handle edge case when game ends with 0 flags
-        if (active.length === 0) {
+        if (active.length === 0 && prevActiveCount > 0) {
           setGameState("finished");
-          return next;
+          return finalFlags;
         }
 
-        return next;
+        return finalFlags;
       });
 
       rafRef.current = requestAnimationFrame(loop);
@@ -951,7 +1107,7 @@ export default function Home() {
               />
             </svg>
             {flags
-              .filter((f) => !f.eliminated && !f.falling)
+              .filter((f) => !f.eliminated && !f.falling && !f.exiting)
               .map((f) => (
                 <motion.div
                   key={f.country.code}
@@ -970,6 +1126,47 @@ export default function Home() {
                 </motion.div>
               ))}
           </div>
+          {/* Exiting flags (smoothly exiting through gap) */}
+          {flags.map((f) => {
+            if (f.exiting && f.exitX !== undefined && f.exitY !== undefined && f.exitStartTime !== undefined) {
+              const exitDuration = 300;
+              const elapsed = performance.now() - f.exitStartTime;
+              const progress = Math.min(elapsed / exitDuration, 1);
+              
+              // Smooth easing for exit animation
+              const easeOutCubic = 1 - Math.pow(1 - progress, 3);
+              // Velocity is in pixels per ms, elapsed is in ms
+              const currentExitX = f.exitX + (f.exitVelocityX || 0) * elapsed * easeOutCubic;
+              const currentExitY = f.exitY + (f.exitVelocityY || 0) * elapsed * easeOutCubic;
+              
+              // Scale and rotation during exit for professional effect
+              const exitScale = 1 + progress * 0.15; // Slightly grow as it exits (more visible)
+              const exitRotation = (f.exitVelocityX || 0) > 0 ? progress * 25 : progress * -25; // Rotate based on direction
+              const exitOpacity = 1 - progress * 0.1; // Very slight fade
+              
+              return (
+                <motion.div
+                  key={`exiting-${f.country.code}-${f.eliminatedOrder}`}
+                  className="absolute flex items-center justify-center rounded-lg bg-white/90 dark:bg-gray-800/90 shadow-md border border-gray-200 dark:border-gray-600 pointer-events-none z-50"
+                  style={{
+                    width: flagSize,
+                    height: flagSize,
+                    fontSize: `${emojiSize}px`,
+                    left: `${currentExitX}px`,
+                    top: `${currentExitY}px`,
+                    transform: `translate(-50%, -50%) rotate(${exitRotation}deg) scale(${exitScale})`,
+                    transformOrigin: 'center center',
+                    opacity: exitOpacity,
+                    transition: 'transform 0.05s linear, opacity 0.05s linear',
+                  }}
+                  initial={false}
+                >
+                  {f.country.flag}
+                </motion.div>
+              );
+            }
+            return null;
+          })}
           {/* Falling flags rendered outside container */}
           {flags.map((f) => {
             if (f.falling && f.fallY !== undefined && f.fallOpacity !== undefined) {
@@ -986,6 +1183,12 @@ export default function Home() {
               fallX = Math.max(padding, Math.min(screenWidth - padding, fallX));
               const stackDelay = f.eliminatedOrder ? (f.eliminatedOrder - 1) * 0.1 : 0;
               
+              // Calculate scale based on fall velocity (slight zoom out effect)
+              const fallScale = f.stacked ? 1 : Math.max(0.85, 1 - (f.fallVelocity || 0) * 0.1);
+              const rotation = f.stacked ? 0 : (f.fallRotation !== undefined ? f.fallRotation : 0); // No rotation when stacked
+              const driftX = f.stacked ? 0 : (f.fallDriftX !== undefined ? f.fallDriftX * 20 : 0); // No drift when stacked
+              const adjustedFallX = f.stacked ? fallX : fallX + driftX;
+              
               return (
                 <motion.div
                   key={`falling-${f.country.code}-${f.eliminatedOrder}`}
@@ -994,25 +1197,30 @@ export default function Home() {
                     width: flagSize,
                     height: flagSize,
                     fontSize: `${emojiSize}px`,
-                    left: `${fallX}px`,
+                    left: `${adjustedFallX}px`,
                     top: `${f.fallY}px`,
                     opacity: f.fallOpacity,
-                    transform: 'translate(-50%, -50%)',
+                    transform: `translate(-50%, -50%) rotate(${rotation}deg) scale(${fallScale})`,
+                    transformOrigin: 'center center',
+                    transition: f.stacked 
+                      ? 'left 0.3s cubic-bezier(0.4, 0, 0.2, 1), top 0.3s cubic-bezier(0.4, 0, 0.2, 1), transform 0.3s cubic-bezier(0.4, 0, 0.2, 1), opacity 0.2s ease-out'
+                      : 'transform 0.05s linear, opacity 0.1s ease-out',
+                    willChange: f.stacked ? 'transform, left, top' : 'transform, opacity',
                   }}
                   initial={false}
                   animate={
                     f.stacked
                       ? {
-                          y: [0, -8, 0],
-                          scale: [1, 1.05, 1],
+                          y: [0, -6, 0],
+                          scale: [1, 1.03, 1],
                         }
                       : {}
                   }
                   transition={
                     f.stacked
                       ? {
-                          duration: 0.6,
-                          delay: stackDelay,
+                          duration: 0.8,
+                          delay: stackDelay * 0.5, // Reduced delay for smoother appearance
                           repeat: Infinity,
                           ease: "easeInOut",
                         }
