@@ -59,13 +59,25 @@ function shuffle<T>(arr: T[]): T[] {
 }
 
 function isInGap(angle: number, gapRotation: number, gapAngleDegrees: number): boolean {
-  // Check if angle is within the gap, accounting for gap rotation
+  // Check if angle is within the gap
+  // The SVG path is rotated -90deg, placing the gap at top (angle -90deg) before outer rotation
+  // Then the entire SVG rotates by gapRotation radians
+  // In Math.atan2: top = -π/2, right = 0, bottom = π/2, left = ±π
+  // When gapRotation = 0, gap is at top (-π/2)
+  // When gapRotation = π/2, gap is at right (0)
+  // So: gapCenterAngle = gapRotation - π/2
   const gapAngle = (gapAngleDegrees * Math.PI) / 180;
-  const relativeAngle = angle - gapRotation;
-  // Normalize to [-PI, PI]
-  let normalized = ((relativeAngle % (2 * Math.PI)) + 2 * Math.PI) % (2 * Math.PI);
-  if (normalized > Math.PI) normalized -= 2 * Math.PI;
-  return Math.abs(normalized) <= gapAngle / 2;
+  const gapCenterAngle = gapRotation - Math.PI / 2;
+  
+  // Calculate the difference between the flag angle and gap center angle
+  let diff = angle - gapCenterAngle;
+  
+  // Normalize to [-π, π]
+  while (diff > Math.PI) diff -= 2 * Math.PI;
+  while (diff < -Math.PI) diff += 2 * Math.PI;
+  
+  // Check if within gap (half gap angle on each side of gap center)
+  return Math.abs(diff) <= gapAngle / 2;
 }
 
 export default function Home() {
@@ -74,7 +86,7 @@ export default function Home() {
   const [flags, setFlags] = useState<BouncingFlag[]>([]);
   const [winner, setWinner] = useState<Country | null>(null);
   const [eliminatedList, setEliminatedList] = useState<Country[]>([]);
-  const [speedMult, setSpeedMult] = useState(1);
+  const [speedMult, setSpeedMult] = useState(0.25);
   const [flagCount, setFlagCount] = useState(8);
   const [settingsModalOpen, setSettingsModalOpen] = useState(false);
   const [winnerModalOpen, setWinnerModalOpen] = useState(false);
@@ -198,7 +210,7 @@ export default function Home() {
       setFlags((prev) => {
         const containerEl = containerRef.current;
         const containerHeight = containerEl ? containerEl.offsetHeight : 0;
-        const FALL_SPEED = 0.3; // pixels per millisecond
+        const FALL_SPEED = 0.15; // pixels per millisecond - slower fall speed
         const FADE_SPEED = 0.002; // opacity per millisecond
 
         // Calculate stack bottom position - above the button area
@@ -375,12 +387,33 @@ export default function Home() {
               const intersectY = prevY + t * dy;
               const intersectAngle = Math.atan2(intersectY, intersectX);
               const currentGapRotation = gapRotationEnabled ? gapRotationRef.current : 0;
+              const intersectDist = Math.sqrt(intersectX * intersectX + intersectY * intersectY);
               
-              // If passing through gap, allow exit (don't clamp)
-              if (isInGap(intersectAngle, currentGapRotation, gapSize)) {
-                // Flag is exiting through gap - keep the new position
-                // The gap check below will handle elimination
-              } else {
+              // If passing through gap and at boundary, eliminate immediately
+              if (isInGap(intersectAngle, currentGapRotation, gapSize) && intersectDist >= maxFlagCenterDistance * 0.98) {
+                // Flag is exiting through gap - eliminate it
+                if (!eliminatedSetRef.current.has(f.country.code)) {
+                  eliminatedOrderRef.current += 1;
+                  eliminatedSetRef.current.add(f.country.code);
+                  setEliminatedList((list) => [...list, f.country]);
+                }
+                const containerRect = containerEl ? containerEl.getBoundingClientRect() : null;
+                const containerLeft = containerRect ? containerRect.left + window.scrollX : 0;
+                const fallStartX = containerLeft + containerWidthForCollision * (cx + intersectX * scale);
+                const fallStartY = containerHeightForCollision * (cy + intersectY * scale);
+                return {
+                  ...f,
+                  eliminated: true,
+                  eliminatedOrder: eliminatedOrderRef.current,
+                  falling: true,
+                  x: intersectX,
+                  y: intersectY,
+                  fallX: fallStartX,
+                  fallY: fallStartY,
+                  fallOpacity: 1,
+                  fallStartTime: performance.now(),
+                };
+              } else if (!isInGap(intersectAngle, currentGapRotation, gapSize)) {
                 // Flag hit wall - clamp to maxFlagCenterDistance (not radius)
                 // Find intersection at maxFlagCenterDistance instead
                 tLow = 0;
@@ -409,12 +442,14 @@ export default function Home() {
               }
             }
           } else if (wasInsideMax && isOutsideMax) {
-            // Flag crossed maxFlagCenterDistance but not radius yet - clamp immediately
+            // Flag crossed maxFlagCenterDistance but not radius yet
+            // Check if it's in the gap area before clamping
             const dx = x - prevX;
             const dy = y - prevY;
             const segmentLength = Math.sqrt(dx * dx + dy * dy);
             
             if (segmentLength > 0) {
+              // Find intersection point at maxFlagCenterDistance
               let tLow = 0;
               let tHigh = 1;
               let t = 0.5;
@@ -434,41 +469,64 @@ export default function Home() {
                 t = (tLow + tHigh) / 2;
               }
               
-              x = prevX + t * dx;
-              y = prevY + t * dy;
-              dist = Math.sqrt(x * x + y * y);
+              // Check gap at intersection point (even though it's at maxFlagCenterDistance, not radius)
+              // This allows flags to exit through the gap even when they're at the visual boundary
+              const intersectX = prevX + t * dx;
+              const intersectY = prevY + t * dy;
+              const intersectAngle = Math.atan2(intersectY, intersectX);
+              const currentGapRotation = gapRotationEnabled ? gapRotationRef.current : 0;
+              
+              // If in gap area, allow it to continue outward (don't clamp yet)
+              if (isInGap(intersectAngle, currentGapRotation, gapSize)) {
+                // Flag is in gap area - let it continue, it will be checked again at radius
+                // Don't clamp here, let it reach radius where elimination happens
+              } else {
+                // Not in gap - clamp to boundary
+                x = prevX + t * dx;
+                y = prevY + t * dy;
+                dist = Math.sqrt(x * x + y * y);
+              }
             }
           }
 
+          // Check if flag is in the gap area - do this check BEFORE any clamping
+          const angle = Math.atan2(y, x);
+          const currentGapRotation = gapRotationEnabled ? gapRotationRef.current : 0;
+          const isInGapArea = isInGap(angle, currentGapRotation, gapSize);
+          
+          // If flag is in gap area and is at or near the boundary, eliminate it immediately
+          // Use a slightly larger threshold to catch flags that are very close to the boundary
+          const eliminationThreshold = maxFlagCenterDistance * 1.02; // 2% tolerance
+          if (isInGapArea && dist >= maxFlagCenterDistance * 0.98) {
+            // Flag exits through gap - eliminate it
+            if (!eliminatedSetRef.current.has(f.country.code)) {
+              eliminatedOrderRef.current += 1;
+              eliminatedSetRef.current.add(f.country.code);
+              setEliminatedList((list) => [...list, f.country]);
+            }
+            // Convert logical position to pixel position for fall animation
+            const containerRect = containerEl ? containerEl.getBoundingClientRect() : null;
+            const containerLeft = containerRect ? containerRect.left + window.scrollX : 0;
+            const fallStartX = containerLeft + containerWidthForCollision * (cx + x * scale);
+            const fallStartY = containerHeightForCollision * (cy + y * scale);
+            return {
+              ...f,
+              eliminated: true,
+              eliminatedOrder: eliminatedOrderRef.current,
+              falling: true,
+              x: x,
+              y: y,
+              fallX: fallStartX,
+              fallY: fallStartY,
+              fallOpacity: 1,
+              fallStartTime: performance.now(),
+            };
+          }
+          
           // Check if flag center has crossed the visual circle boundary (radius 0.42)
           // Use circular distance check - this ensures circular bouncing area
           if (dist > radius) {
-            const angle = Math.atan2(y, x);
-            const currentGapRotation = gapRotationEnabled ? gapRotationRef.current : 0;
-            
-            // Check if flag is passing through the gap
-            if (isInGap(angle, currentGapRotation, gapSize)) {
-              // Flag exits through gap - eliminate it
-              if (!eliminatedSetRef.current.has(f.country.code)) {
-                eliminatedOrderRef.current += 1;
-                eliminatedSetRef.current.add(f.country.code);
-                setEliminatedList((list) => [...list, f.country]);
-              }
-              // Convert logical position to pixel position for fall animation
-              const fallStartX = containerWidthForCollision * (cx + x * scale);
-              const fallStartY = containerHeightForCollision * (cy + y * scale);
-              return {
-                ...f,
-                eliminated: true,
-                eliminatedOrder: eliminatedOrderRef.current,
-                falling: true,
-                x: x, // Keep the exit position
-                y: y, // Keep the exit position
-                fallY: fallStartY,
-                fallOpacity: 1,
-                fallStartTime: performance.now(),
-              };
-            }
+            // Flag crossed radius but not in gap - bounce back
             
             // Flag hit the circular wall (not in gap) - bounce back
             // Calculate normal vector pointing outward from circle center
@@ -627,7 +685,7 @@ export default function Home() {
   }, [gameState, loopEnabled, winner, startGame]);
 
   return (
-    <div className="h-screen w-screen overflow-hidden bg-gray-50 transition-colors dark:bg-gray-950">
+    <div className="fixed inset-0 w-full h-full overflow-hidden bg-gray-50 transition-colors dark:bg-gray-950">
       {/* Settings button - floating */}
       <button
         onClick={() => setSettingsModalOpen(true)}
@@ -797,7 +855,7 @@ export default function Home() {
       </Modal>
 
       {/* Game arena */}
-      <div className="relative flex flex-col items-center justify-center w-full h-full overflow-hidden pb-20 md:pb-0">
+      <div className="absolute inset-0 flex flex-col items-center justify-center w-full h-full overflow-hidden">
         <div className="relative w-full h-full max-w-full max-h-full overflow-hidden flex items-center justify-center">
           <div
             ref={containerRef}
@@ -839,19 +897,53 @@ export default function Home() {
                 transition: gapRotationEnabled ? "none" : "transform 0.1s linear",
               }}
             >
-              {/* Circle border with gap */}
-              <circle
-                cx="50"
-                cy="50"
-                r="42"
+              {/* Circle border as arc (excluding gap) */}
+              {/* Gap is centered at angle 0 (right) before -90deg rotation, becomes top after rotation */}
+              {/* In SVG: angle 0 = right, 90deg = bottom, -90deg = top */}
+              {/* After -90deg rotation: what was right (angle 0) becomes top (angle -90deg) */}
+              {/* So we draw gap centered at angle 0 before the path rotation */}
+              <path
+                d={`M ${50 + 42 * Math.cos((gapSize / 2) * Math.PI / 180)} ${50 + 42 * Math.sin((gapSize / 2) * Math.PI / 180)} A 42 42 0 1 1 ${50 + 42 * Math.cos((360 - gapSize / 2) * Math.PI / 180)} ${50 + 42 * Math.sin((360 - gapSize / 2) * Math.PI / 180)}`}
                 fill="none"
                 stroke="rgba(59, 130, 246, 0.9)"
                 strokeWidth="2.5"
                 strokeLinecap="round"
                 strokeLinejoin="round"
-                pathLength={100}
-                strokeDasharray={`${100 - (gapSize / 360) * 100} ${(gapSize / 360) * 100}`}
-                strokeDashoffset="0"
+                style={{
+                  transform: "rotate(-90deg)",
+                  transformOrigin: "50% 50%",
+                }}
+              />
+              {/* Red marker for gap area - exactly matches the gap position */}
+              {/* Gap spans from -gapSize/2 to +gapSize/2 degrees around angle 0 before rotation */}
+              <path
+                d={`M ${50 + 42 * Math.cos((-gapSize / 2) * Math.PI / 180)} ${50 + 42 * Math.sin((-gapSize / 2) * Math.PI / 180)} A 42 42 0 ${gapSize > 180 ? 1 : 0} 1 ${50 + 42 * Math.cos((gapSize / 2) * Math.PI / 180)} ${50 + 42 * Math.sin((gapSize / 2) * Math.PI / 180)}`}
+                fill="none"
+                stroke="rgba(239, 68, 68, 0.9)"
+                strokeWidth="5"
+                strokeLinecap="round"
+                opacity="0.9"
+                style={{
+                  transform: "rotate(-90deg)",
+                  transformOrigin: "50% 50%",
+                }}
+              />
+              {/* Red indicator dots at gap edges */}
+              <circle
+                cx={50 + 42 * Math.cos((-gapSize / 2) * Math.PI / 180)}
+                cy={50 + 42 * Math.sin((-gapSize / 2) * Math.PI / 180)}
+                r="3.5"
+                fill="rgba(239, 68, 68, 1)"
+                style={{
+                  transform: "rotate(-90deg)",
+                  transformOrigin: "50% 50%",
+                }}
+              />
+              <circle
+                cx={50 + 42 * Math.cos((gapSize / 2) * Math.PI / 180)}
+                cy={50 + 42 * Math.sin((gapSize / 2) * Math.PI / 180)}
+                r="3.5"
+                fill="rgba(239, 68, 68, 1)"
                 style={{
                   transform: "rotate(-90deg)",
                   transformOrigin: "50% 50%",
@@ -883,18 +975,15 @@ export default function Home() {
             if (f.falling && f.fallY !== undefined && f.fallOpacity !== undefined) {
               const container = containerRef.current;
               const containerWidth = container ? container.offsetWidth : 0;
-              // Use fallX if stacked (centered at bottom), otherwise use original position
-              let fallX = f.stacked && f.fallX !== undefined 
+              // Use fallX if available (set when flag exits), otherwise use original position
+              let fallX = f.fallX !== undefined 
                 ? f.fallX 
                 : containerWidth * (cx + f.x * scale);
               
-              // For stacked flags, fallX is already calculated relative to screen center
-              // For falling flags, ensure they stay within viewport
-              if (!f.stacked) {
-                const screenWidth = window.innerWidth || containerWidth;
-                const padding = flagSize / 2;
-                fallX = Math.max(padding, Math.min(screenWidth - padding, fallX));
-              }
+              // Ensure flags stay within viewport
+              const screenWidth = window.innerWidth || containerWidth;
+              const padding = flagSize / 2;
+              fallX = Math.max(padding, Math.min(screenWidth - padding, fallX));
               const stackDelay = f.eliminatedOrder ? (f.eliminatedOrder - 1) * 0.1 : 0;
               
               return (
