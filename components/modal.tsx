@@ -10,10 +10,11 @@ interface ModalProps {
   onClose: () => void;
   title?: string;
   size?: "sm" | "md" | "lg" | "xl";
+  hideHeader?: boolean;
   children: React.ReactNode;
 }
 
-export function Modal({ isOpen, onClose, title, size = "md", children }: ModalProps) {
+export function Modal({ isOpen, onClose, title, size = "md", hideHeader = false, children }: ModalProps) {
   useEffect(() => {
     if (isOpen) {
       document.body.style.overflow = "hidden";
@@ -70,7 +71,7 @@ export function Modal({ isOpen, onClose, title, size = "md", children }: ModalPr
               className={`w-full ${sizeClasses[size]} bg-white dark:bg-gray-900 rounded-xl shadow-xl pointer-events-auto max-h-[90vh] overflow-hidden flex flex-col`}
             >
               {/* Header */}
-              {(title || true) && (
+              {!hideHeader && (
                 <div className="flex items-center justify-between p-6 border-b border-gray-200 dark:border-gray-800">
                   {title && (
                     <h2 className="text-xl font-semibold text-gray-900 dark:text-white">

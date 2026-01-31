@@ -34,6 +34,7 @@ function getFlagSize(flagCount: number): number {
 type GameState = "idle" | "playing" | "finished";
 
 interface BouncingFlag {
+  id: string;
   country: Country;
   x: number;
   y: number;
@@ -96,15 +97,19 @@ export default function Home() {
   const [winner, setWinner] = useState<Country | null>(null);
   const [eliminatedList, setEliminatedList] = useState<Country[]>([]);
   const [speedMult, setSpeedMult] = useState(0.25);
-  const [flagCount, setFlagCount] = useState(8);
+  const [flagCount, setFlagCount] = useState(20);
   const [settingsModalOpen, setSettingsModalOpen] = useState(false);
   const [winnerModalOpen, setWinnerModalOpen] = useState(false);
+  const [nextRoundCountdown, setNextRoundCountdown] = useState<number | null>(null);
   const [gapRotation, setGapRotation] = useState(0);
   const [gapRotationEnabled, setGapRotationEnabled] = useState(true);
-  const [gapRotationSpeed, setGapRotationSpeed] = useState(1); // 0.5x, 1x, 1.5x, 2x
+  const [gapRotationSpeed, setGapRotationSpeed] = useState(4); // 0.5x, 1x, 1.5x, 2x, 2.5x, 3x, 4x, 5x
   const [gapSize, setGapSize] = useState(DEFAULT_GAP_ANGLE); // Gap size in degrees
-  const [loopEnabled, setLoopEnabled] = useState(false); // Auto-start next round
+  const [loopEnabled, setLoopEnabled] = useState(true); // Auto-start next round
+  const [winnerCounts, setWinnerCounts] = useState<Record<string, number>>({}); // country code -> win count (top 10 by wins)
+  const [totalRounds, setTotalRounds] = useState(0); // total rounds played
   const eliminatedOrderRef = useRef(0);
+  const flagIdRef = useRef(0);
   const rafRef = useRef<number>(0);
   const lastTimeRef = useRef<number>(0);
   const gapRotationRef = useRef(0);
@@ -147,6 +152,7 @@ export default function Home() {
       const angle = Math.random() * 2 * Math.PI;
       const speed = 0.15 + Math.random() * 0.1;
       return {
+        id: `flag-${flagIdRef.current++}`,
         country,
         x,
         y,
@@ -225,13 +231,14 @@ export default function Home() {
         const ROTATION_SPEED = 0.15; // Rotation speed (degrees per millisecond)
         const FADE_SPEED = 0.0015; // opacity per millisecond
 
-        // Calculate stack bottom position - above the button area
+        // Calculate stack bottom position - above the button area and Top 10 panel
         const screenHeight = window.innerHeight || containerHeight;
         // Button area is fixed at bottom with p-4 (16px padding) and button height (~48px)
-        // Total button area height is approximately 80px on mobile, less on desktop
         const isMobile = window.innerWidth < 768;
-        const buttonAreaHeight = isMobile ? 80 : 0; // Button area only on mobile (fixed bottom)
-        const stackBottom = screenHeight - buttonAreaHeight;
+        const buttonAreaHeight = isMobile ? 80 : 0;
+        // When loop enabled and Top 10 winners is visible, reserve space so falling flags don't overlap it (reduced gap)
+        const top10PanelHeight = (loopEnabled && Object.keys(winnerCounts).length > 0) ? 100 : 0;
+        const stackBottom = screenHeight - buttonAreaHeight - top10PanelHeight;
 
         // Update falling flags - let them stack at the bottom
         // First, process all flags to determine which ones are stacking
@@ -343,28 +350,11 @@ export default function Home() {
               const rowHeight = flagSize * 0.95; // Slightly tighter vertical spacing
               const rowY = stackBottom - flagSize - (rowIndex * rowHeight);
               
-              // Calculate X position - center flags based on actual count in row
-              // Ensure equal padding on both sides by calculating from screen edges
-              // Since we use translate(-50%, -50%), left position represents flag center
-              // Leftmost flag center should be: horizontalPadding + flagSize / 2
-              // Rightmost flag center should be: screenWidth - horizontalPadding - flagSize / 2
-              
-              let rowX: number;
-              if (actualFlagsInRow === 1) {
-                // Single flag in row - center it perfectly
-                rowX = screenWidth / 2;
-              } else {
-                // Multiple flags - calculate positions to ensure equal padding
-                const leftmostFlagCenter = horizontalPadding + flagSize / 2;
-                const rightmostFlagCenter = screenWidth - horizontalPadding - flagSize / 2;
-                const totalRowWidth = rightmostFlagCenter - leftmostFlagCenter;
-                
-                // Calculate spacing between flag centers (evenly distribute)
-                const actualSpacing = totalRowWidth / (actualFlagsInRow - 1);
-                
-                // Position flag within the row
-                rowX = leftmostFlagCenter + (positionInRow * actualSpacing);
-              }
+              // Calculate X position - center the block of flags in the row (equal space left & right)
+              const gapBetweenFlags = flagSize * 0.15;
+              const rowContentWidth = actualFlagsInRow * flagSize + (actualFlagsInRow - 1) * gapBetweenFlags;
+              const firstFlagCenterX = (screenWidth - rowContentWidth) / 2 + flagSize / 2;
+              const rowX = firstFlagCenterX + positionInRow * (flagSize + gapBetweenFlags);
               
               // Keep opacity visible and consistent
               const finalOpacity = Math.max(0.75, f.fallOpacity);
@@ -485,15 +475,20 @@ export default function Home() {
                   setEliminatedList((list) => [...list, f.country]);
                 }
                 const containerRect = containerEl ? containerEl.getBoundingClientRect() : null;
-                const containerLeft = containerRect ? containerRect.left + window.scrollX : 0;
-                const containerTop = containerRect ? containerRect.top + window.scrollY : 0;
-                const exitX = containerLeft + containerWidthForCollision * (cx + intersectX * scale);
-                const exitY = containerTop + containerHeightForCollision * (cy + intersectY * scale);
+                const containerLeft = containerRect ? containerRect.left : 0;
+                const containerTop = containerRect ? containerRect.top : 0;
+                // Push exit position outward from circle edge for more visible gap
+                const EXIT_GAP_OFFSET = 0.12; // Logical units (~12% of radius) - gap between circle and exiting flag
+                const nx = intersectX / (intersectDist || 0.001);
+                const ny = intersectY / (intersectDist || 0.001);
+                const exitPosX = intersectX + nx * EXIT_GAP_OFFSET;
+                const exitPosY = intersectY + ny * EXIT_GAP_OFFSET;
+                const exitX = containerLeft + containerWidthForCollision * (cx + exitPosX * scale);
+                const exitY = containerTop + containerHeightForCollision * (cy + exitPosY * scale);
                 
                 // Calculate exit velocity based on flag's current velocity (maintain momentum)
-                // Convert logical velocity to pixel velocity
-                const exitSpeed = Math.sqrt(f.vx * f.vx + f.vy * f.vy) * BASE_SPEED * 60; // pixels per frame
-                const exitAngle = Math.atan2(intersectY, intersectX); // Direction from center
+                const exitSpeed = Math.sqrt(f.vx * f.vx + f.vy * f.vy) * BASE_SPEED * 60;
+                const exitAngle = Math.atan2(intersectY, intersectX);
                 const exitVelocityX = Math.cos(exitAngle) * exitSpeed * containerWidthForCollision * scale * 0.5; // pixels per ms
                 const exitVelocityY = Math.sin(exitAngle) * exitSpeed * containerHeightForCollision * scale * 0.5; // pixels per ms
                 
@@ -601,17 +596,22 @@ export default function Home() {
               eliminatedSetRef.current.add(f.country.code);
               setEliminatedList((list) => [...list, f.country]);
             }
-            // Convert logical position to pixel position for exit animation
+            // Convert logical position to pixel position for exit animation (viewport coordinates for fixed overlay)
             const containerRect = containerEl ? containerEl.getBoundingClientRect() : null;
-            const containerLeft = containerRect ? containerRect.left + window.scrollX : 0;
-            const containerTop = containerRect ? containerRect.top + window.scrollY : 0;
-            const exitX = containerLeft + containerWidthForCollision * (cx + x * scale);
-            const exitY = containerTop + containerHeightForCollision * (cy + y * scale);
+            const containerLeft = containerRect ? containerRect.left : 0;
+            const containerTop = containerRect ? containerRect.top : 0;
+            // Push exit position outward from circle edge for more visible gap
+            const EXIT_GAP_OFFSET = 0.12;
+            const nx = x / (dist || 0.001);
+            const ny = y / (dist || 0.001);
+            const exitPosX = x + nx * EXIT_GAP_OFFSET;
+            const exitPosY = y + ny * EXIT_GAP_OFFSET;
+            const exitX = containerLeft + containerWidthForCollision * (cx + exitPosX * scale);
+            const exitY = containerTop + containerHeightForCollision * (cy + exitPosY * scale);
             
             // Calculate exit velocity based on flag's current velocity (maintain momentum)
-            // Convert logical velocity to pixel velocity
-            const exitSpeed = Math.sqrt(f.vx * f.vx + f.vy * f.vy) * BASE_SPEED * 60; // pixels per frame
-            const exitAngle = Math.atan2(y, x); // Direction from center
+            const exitSpeed = Math.sqrt(f.vx * f.vx + f.vy * f.vy) * BASE_SPEED * 60;
+            const exitAngle = Math.atan2(y, x);
             const exitVelocityX = Math.cos(exitAngle) * exitSpeed * containerWidthForCollision * scale * 0.5; // pixels per ms
             const exitVelocityY = Math.sin(exitAngle) * exitSpeed * containerHeightForCollision * scale * 0.5; // pixels per ms
             
@@ -788,24 +788,11 @@ export default function Home() {
               const rowHeight = flagSize * 0.95;
               const rowY = stackBottom - flagSize - (rowIndex * rowHeight);
               
-              // Ensure equal padding on both sides by calculating from screen edges
-              // Since we use translate(-50%, -50%), left position represents flag center
-              let rowX: number;
-              if (actualFlagsInRow === 1) {
-                // Single flag in row - center it perfectly
-                rowX = recalcScreenWidth / 2;
-              } else {
-                // Multiple flags - calculate positions to ensure equal padding
-                const leftmostFlagCenter = recalcHorizontalPadding + flagSize / 2;
-                const rightmostFlagCenter = recalcScreenWidth - recalcHorizontalPadding - flagSize / 2;
-                const totalRowWidth = rightmostFlagCenter - leftmostFlagCenter;
-                
-                // Calculate spacing between flag centers (evenly distribute)
-                const actualSpacing = totalRowWidth / (actualFlagsInRow - 1);
-                
-                // Position flag within the row
-                rowX = leftmostFlagCenter + (positionInRow * actualSpacing);
-              }
+              // Center the block of flags in the row (equal space left & right)
+              const gapBetweenFlags = flagSize * 0.15;
+              const rowContentWidth = actualFlagsInRow * flagSize + (actualFlagsInRow - 1) * gapBetweenFlags;
+              const firstFlagCenterX = (recalcScreenWidth - rowContentWidth) / 2 + flagSize / 2;
+              const rowX = firstFlagCenterX + positionInRow * (flagSize + gapBetweenFlags);
               
               return {
                 ...f,
@@ -845,7 +832,7 @@ export default function Home() {
     return () => {
       if (rafRef.current) cancelAnimationFrame(rafRef.current);
     };
-  }, [gameState, speedMult, flags.length, gapRotationEnabled, gapRotationSpeed, gapSize]);
+  }, [gameState, speedMult, flags.length, gapRotationEnabled, gapRotationSpeed, gapSize, loopEnabled, winnerCounts]);
 
   // Calculate dynamic flag size based on flag count
   const flagSize = getFlagSize(flagCount);
@@ -882,6 +869,7 @@ export default function Home() {
           y = (Math.random() * 2 - 1) * placementRadius;
         } while (x * x + y * y > placementRadius * placementRadius);
         return {
+          id: `flag-${flagIdRef.current++}`,
           country,
           x,
           y,
@@ -909,32 +897,97 @@ export default function Home() {
     }
   }, [winner, gameState]);
 
-  // Auto-start next round if loop is enabled
+  const prevGameStateRef = useRef<GameState>(gameState);
+  // When round finishes: increment total rounds and (if loop) winner win count
   useEffect(() => {
-    if (gameState === "finished" && loopEnabled && winner) {
-      const timer = setTimeout(() => {
-        // Close winner modal and start new round
-        setWinnerModalOpen(false);
-        // Small delay to ensure modal closes smoothly
-        setTimeout(() => {
-          startGame();
-        }, 300);
-      }, 5000); // Wait 5 seconds before starting next round (show winner for 5s)
-      
-      return () => clearTimeout(timer);
+    if (prevGameStateRef.current !== "finished" && gameState === "finished") {
+      setTotalRounds((prev) => prev + 1);
     }
-  }, [gameState, loopEnabled, winner, startGame]);
+    prevGameStateRef.current = gameState;
+    if (gameState === "finished" && loopEnabled && winner) {
+      setWinnerCounts((prev) => ({
+        ...prev,
+        [winner.code]: (prev[winner.code] ?? 0) + 1,
+      }));
+    }
+  }, [gameState, loopEnabled, winner]);
+
+  // Initialize countdown when winner modal opens with loop enabled
+  useEffect(() => {
+    if (winnerModalOpen && loopEnabled && winner) {
+      setNextRoundCountdown(5);
+    } else {
+      setNextRoundCountdown(null);
+    }
+  }, [winnerModalOpen, loopEnabled, winner]);
+
+  // Countdown tick - start next round when it reaches 0
+  useEffect(() => {
+    if (nextRoundCountdown === null || nextRoundCountdown <= 0) return;
+
+    const timer = setTimeout(() => {
+      setNextRoundCountdown((prev) => {
+        if (prev === null || prev <= 1) {
+          setWinnerModalOpen(false);
+          setTimeout(() => startGame(), 300);
+          return null;
+        }
+        return prev - 1;
+      });
+    }, 1000);
+
+    return () => clearTimeout(timer);
+  }, [nextRoundCountdown, startGame]);
 
   return (
     <div className="fixed inset-0 w-full h-full overflow-hidden bg-gray-50 transition-colors dark:bg-gray-950">
-      {/* Settings button - floating */}
-      <button
-        onClick={() => setSettingsModalOpen(true)}
-        className="fixed top-4 right-4 z-50 rounded-lg p-2 bg-white/90 dark:bg-gray-800/90 shadow-lg border border-gray-200 dark:border-gray-700 text-gray-500 transition-colors hover:bg-gray-100 hover:text-gray-900 dark:text-gray-400 dark:hover:bg-gray-700 dark:hover:text-white"
-        aria-label="Open settings"
-      >
-        <Settings className="h-5 w-5" />
-      </button>
+      {/* Top bar: Play left, Total rounds center, Settings right */}
+      <div className="fixed top-0 left-0 right-0 z-50 grid grid-cols-3 items-center p-4">
+        <div className="flex justify-start">
+          {gameState === "idle" && (
+            <Button onClick={startGame} className="w-10 h-10 p-0 flex items-center justify-center shrink-0" aria-label="Start Round">
+              <Play className="h-5 w-5" />
+            </Button>
+          )}
+          {gameState === "playing" && (
+            <Button
+              variant="outline"
+              onClick={() => {
+                const active = flags.filter((f) => !f.eliminated);
+                if (active.length > 0) {
+                  const chosen = active[Math.floor(Math.random() * active.length)];
+                  setWinner(chosen.country);
+                  setWinnerModalOpen(true);
+                }
+                setGameState("finished");
+              }}
+              className="w-10 h-10 p-0 flex items-center justify-center shrink-0"
+              aria-label="End Round Early"
+            >
+              <Zap className="h-5 w-5" />
+            </Button>
+          )}
+          {gameState === "finished" && (
+            <Button onClick={startGame} className="w-10 h-10 p-0 flex items-center justify-center shrink-0" aria-label="Play Again">
+              <RotateCcw className="h-5 w-5" />
+            </Button>
+          )}
+        </div>
+        <div className="flex justify-center pointer-events-none">
+          <span className="inline-flex items-center px-4 py-1.5 rounded-full bg-amber-100 dark:bg-amber-900/40 text-amber-800 dark:text-amber-200 font-semibold text-base shadow-sm border border-amber-200/60 dark:border-amber-700/50">
+            Round {totalRounds}
+          </span>
+        </div>
+        <div className="flex justify-end">
+          <button
+            // onClick={() => setSettingsModalOpen(true)}
+            className="rounded-lg p-2 bg-white/90 dark:bg-gray-800/90 shadow border border-gray-200 dark:border-gray-700 text-gray-500 transition-colors hover:bg-gray-100 hover:text-gray-900 dark:text-gray-400 dark:hover:bg-gray-700 dark:hover:text-white"
+            aria-label="Open settings"
+          >
+            <Settings className="h-5 w-5" />
+          </button>
+        </div>
+      </div>
 
       {/* Settings Modal */}
       <Modal
@@ -1095,8 +1148,8 @@ export default function Home() {
         </div>
       </Modal>
 
-      {/* Game arena */}
-      <div className="absolute inset-0 flex flex-col items-center justify-center w-full h-full overflow-hidden">
+      {/* Game arena - starts right after Round count bar */}
+      <div className="absolute top-[-100px] left-0 right-0 bottom-0 flex flex-col items-center justify-center w-full h-full overflow-hidden">
         <div className="relative w-full h-full max-w-full max-h-full overflow-hidden flex items-center justify-center">
           <div
             ref={containerRef}
@@ -1195,7 +1248,7 @@ export default function Home() {
               .filter((f) => !f.eliminated && !f.falling && !f.exiting)
               .map((f) => (
                 <motion.div
-                  key={f.country.code}
+                  key={f.id}
                   className="absolute flex items-center justify-center rounded-lg bg-white/90 dark:bg-gray-800/90 shadow-md border border-gray-200 dark:border-gray-600 pointer-events-none -translate-x-1/2 -translate-y-1/2"
                   style={{
                     width: flagSize,
@@ -1211,7 +1264,10 @@ export default function Home() {
                 </motion.div>
               ))}
           </div>
-          {/* Exiting flags (smoothly exiting through gap) */}
+        </div>
+
+        {/* Exiting & falling flags - fixed overlay (viewport coords) so they don't clip when Top 10 is visible */}
+        <div className="fixed inset-0 pointer-events-none z-20">
           {flags.map((f) => {
             if (f.exiting && f.exitX !== undefined && f.exitY !== undefined && f.exitStartTime !== undefined) {
               const exitDuration = 300;
@@ -1231,14 +1287,13 @@ export default function Home() {
               
               return (
                 <motion.div
-                  key={`exiting-${f.country.code}-${f.eliminatedOrder}`}
+                  key={`exiting-${f.id}-${f.eliminatedOrder}`}
                   className="absolute flex items-center justify-center rounded-lg bg-white/90 dark:bg-gray-800/90 shadow-md border border-gray-200 dark:border-gray-600 pointer-events-none z-50"
                   style={{
                     width: flagSize,
                     height: flagSize,
-                    fontSize: `${emojiSize}px`,
-                    left: `${currentExitX}px`,
-                    top: `${currentExitY}px`,
+                    left: currentExitX,
+                    top: currentExitY,
                     transform: `translate(-50%, -50%) rotate(${exitRotation}deg) scale(${exitScale})`,
                     transformOrigin: 'center center',
                     opacity: exitOpacity,
@@ -1257,10 +1312,11 @@ export default function Home() {
             if (f.falling && f.fallY !== undefined && f.fallOpacity !== undefined) {
               const container = containerRef.current;
               const containerWidth = container ? container.offsetWidth : 0;
-              // Use fallX if available (set when flag exits), otherwise use original position
+              const containerRect = container ? container.getBoundingClientRect() : null;
+              // Use fallX if available (set when flag exits), otherwise convert from container coords to viewport
               let fallX = f.fallX !== undefined 
                 ? f.fallX 
-                : containerWidth * (cx + f.x * scale);
+                : (containerRect ? containerRect.left : 0) + containerWidth * (cx + f.x * scale);
               
               // Ensure flags stay within viewport
               const screenWidth = window.innerWidth || containerWidth;
@@ -1276,7 +1332,7 @@ export default function Home() {
               
               return (
                 <motion.div
-                  key={`falling-${f.country.code}-${f.eliminatedOrder}`}
+                  key={`falling-${f.id}-${f.eliminatedOrder}`}
                   className="absolute flex items-center justify-center rounded-lg bg-white/90 dark:bg-gray-800/90 shadow-md border border-gray-200 dark:border-gray-600 pointer-events-none"
                   style={{
                     width: flagSize,
@@ -1320,39 +1376,49 @@ export default function Home() {
           })}
         </div>
 
-        {/* Controls - Fixed at bottom on mobile */}
-        <div className="fixed bottom-0 left-0 right-0 md:relative md:bottom-auto md:left-auto md:right-auto flex flex-wrap items-center justify-center gap-3 p-4 md:p-0 bg-white/95 dark:bg-gray-900/95 backdrop-blur-sm border-t border-gray-200 dark:border-gray-800 md:border-t-0 md:bg-transparent md:dark:bg-transparent md:backdrop-blur-none z-40 md:z-auto">
-          {gameState === "idle" && (
-            <Button onClick={startGame} className="gap-2 flex items-center w-full md:w-auto">
-              <Play className="h-4 w-4" />
-              <span>Start Round</span>
-            </Button>
-          )}
-          {gameState === "playing" && (
-            <Button
-              variant="outline"
-              onClick={() => {
-                const active = flags.filter((f) => !f.eliminated);
-                if (active.length > 0) {
-                  const chosen = active[Math.floor(Math.random() * active.length)];
-                  setWinner(chosen.country);
-                  setWinnerModalOpen(true);
-                }
-                setGameState("finished");
-              }}
-              className="gap-2 flex items-center w-full md:w-auto"
-            >
-              <Zap className="h-4 w-4" />
-              <span>End Round Early</span>
-            </Button>
-          )}
-          {gameState === "finished" && (
-            <Button onClick={startGame} className="gap-2 flex items-center w-full md:w-auto">
-              <RotateCcw className="h-4 w-4" />
-              <span>Play Again</span>
-            </Button>
-          )}
-        </div>
+        {/* Top 10 winners list - 2 columns with win count, when auto loop is on */}
+        {loopEnabled && Object.keys(winnerCounts).length > 0 && (() => {
+          const sorted = Object.entries(winnerCounts).sort(([, a], [, b]) => b - a);
+          const top10Slice = sorted.slice(0, 10);
+          const cutoffWins = top10Slice.length > 0 ? top10Slice[top10Slice.length - 1][1] : 0;
+          // Include ties at the cutoff - if 10th has 2 wins, also show any others with exactly 2 wins
+          const top10Entries = [
+            ...top10Slice,
+            ...sorted.slice(10).filter(([, wins]) => wins === cutoffWins),
+          ];
+          const top10 = top10Entries
+            .map(([code, wins]) => ({ country: countries.find((c) => c.code === code), wins }))
+            .filter((entry): entry is { country: Country; wins: number } => entry.country != null);
+          return (
+            <div className="fixed bottom-4 left-0 right-0 z-30 px-3 md:relative md:bottom-auto md:left-auto md:right-auto md:z-auto md:mt-2 md:pb-0 w-full max-w-[min(100vw,100vh)] flex-shrink-0">
+              <div className="rounded-xl border border-amber-200/80 dark:border-amber-700/50 bg-amber-50/95 dark:bg-amber-950/80 shadow-md backdrop-blur-sm px-3 py-2 mx-auto max-w-[min(100vw,100vh)]">
+                <div className="flex items-center gap-2 mb-1.5 md:mb-2">
+                  <span className="text-xs font-semibold text-amber-800 dark:text-amber-200 uppercase tracking-wide">
+                    🏆 Top 10 winners
+                  </span>
+                </div>
+                <div className="grid grid-cols-2 gap-x-1.5 gap-y-0.5">
+                  {top10.map(({ country, wins }, i) => (
+                    <div
+                      key={`${country.code}-${i}`}
+                      className="flex items-center justify-between gap-1.5 rounded-md bg-white/90 dark:bg-gray-800/90 px-1.5 py-0.5 text-xs border border-amber-100 dark:border-amber-800/50"
+                    >
+                      <span className="flex items-center gap-1.5 min-w-0">
+                        <span>{country.flag}</span>
+                        <span className="text-gray-700 dark:text-gray-300 font-medium truncate max-w-[70px] sm:max-w-[90px]">
+                          {country.name}
+                        </span>
+                      </span>
+                      <span className="shrink-0 font-semibold text-amber-700 dark:text-amber-300 tabular-nums">
+                        {wins} {wins === 1 ? "win" : "wins"}
+                      </span>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            </div>
+          );
+        })()}
 
         {/* Winner Modal */}
         <Modal
@@ -1360,6 +1426,7 @@ export default function Home() {
           onClose={() => setWinnerModalOpen(false)}
           title=""
           size="lg"
+          hideHeader
         >
           <div className="space-y-6 relative overflow-hidden">
             {/* Enhanced Confetti particles */}
@@ -1605,6 +1672,21 @@ export default function Home() {
                     </motion.div>
                   </motion.div>
                 </motion.div>
+              </motion.div>
+            )}
+
+            {loopEnabled && nextRoundCountdown !== null && (
+              <motion.div
+                initial={{ opacity: 0 }}
+                animate={{ opacity: 1 }}
+                className="flex flex-col items-center py-4"
+              >
+                <p className="text-lg font-medium text-gray-700 dark:text-gray-300">
+                  Next round in
+                </p>
+                <p className="text-4xl font-bold text-amber-600 dark:text-amber-400 tabular-nums mt-1">
+                  {nextRoundCountdown}
+                </p>
               </motion.div>
             )}
 

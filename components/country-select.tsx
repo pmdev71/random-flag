@@ -149,6 +149,4 @@ export const countries: Country[] = [
   { code: "SC", name: "Seychelles", flag: "🇸🇨" },
   { code: "KM", name: "Comoros", flag: "🇰🇲" },
   { code: "AO", name: "Angola", flag: "🇦🇴" },
-  { code: "ZM", name: "Zambia", flag: "🇿🇲" },
-  { code: "MW", name: "Malawi", flag: "🇲🇼" },
 ];
