@@ -1249,7 +1249,7 @@ export default function Home() {
               .map((f) => (
                 <motion.div
                   key={f.id}
-                  className="absolute flex items-center justify-center rounded-lg bg-white/90 dark:bg-gray-800/90 shadow-md border border-gray-200 dark:border-gray-600 pointer-events-none -translate-x-1/2 -translate-y-1/2"
+                  className="absolute flex items-center justify-center rounded-lg pointer-events-none -translate-x-1/2 -translate-y-1/2"
                   style={{
                     width: flagSize,
                     height: flagSize,
@@ -1288,7 +1288,7 @@ export default function Home() {
               return (
                 <motion.div
                   key={`exiting-${f.id}-${f.eliminatedOrder}`}
-                  className="absolute flex items-center justify-center rounded-lg bg-white/90 dark:bg-gray-800/90 shadow-md border border-gray-200 dark:border-gray-600 pointer-events-none z-50"
+                  className="absolute flex items-center justify-center rounded-lg pointer-events-none z-50"
                   style={{
                     width: flagSize,
                     height: flagSize,
@@ -1333,7 +1333,7 @@ export default function Home() {
               return (
                 <motion.div
                   key={`falling-${f.id}-${f.eliminatedOrder}`}
-                  className="absolute flex items-center justify-center rounded-lg bg-white/90 dark:bg-gray-800/90 shadow-md border border-gray-200 dark:border-gray-600 pointer-events-none"
+                  className="absolute flex items-center justify-center rounded-lg pointer-events-none"
                   style={{
                     width: flagSize,
                     height: flagSize,
