@@ -1381,11 +1381,9 @@ export default function Home() {
           const sorted = Object.entries(winnerCounts).sort(([, a], [, b]) => b - a);
           const top10Slice = sorted.slice(0, 10);
           const cutoffWins = top10Slice.length > 0 ? top10Slice[top10Slice.length - 1][1] : 0;
-          // Include ties at the cutoff - if 10th has 2 wins, also show any others with exactly 2 wins
-          const top10Entries = [
-            ...top10Slice,
-            ...sorted.slice(10).filter(([, wins]) => wins === cutoffWins),
-          ];
+          // Include ties at 10th place only (not when everyone has same count) - cap at 15 to avoid showing all
+          const tiesAtCutoff = sorted.slice(10).filter(([, wins]) => wins === cutoffWins && wins > 1);
+          const top10Entries = [...top10Slice, ...tiesAtCutoff].slice(0, 15);
           const top10 = top10Entries
             .map(([code, wins]) => ({ country: countries.find((c) => c.code === code), wins }))
             .filter((entry): entry is { country: Country; wins: number } => entry.country != null);
