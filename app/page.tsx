@@ -17,13 +17,13 @@ import { ToastContainer, useToast } from "@/components/toast";
 
 const DEFAULT_GAP_ANGLE = 35; // Default gap size in degrees
 const LOGICAL_R = 1;
-const BASE_FLAG_SIZE = 36;
+const BASE_FLAG_SIZE = 50;
 const BASE_SPEED = 0.00035;
 
 // Calculate flag size based on number of flags
 function getFlagSize(flagCount: number): number {
   // Base size for small counts, scale down as count increases
-  if (flagCount <= 10) return BASE_FLAG_SIZE;
+  if (flagCount <= 1000) return BASE_FLAG_SIZE;
   if (flagCount <= 20) return BASE_FLAG_SIZE * 0.75; // 27px
   if (flagCount <= 50) return BASE_FLAG_SIZE * 0.6; // 21.6px
   if (flagCount <= 100) return BASE_FLAG_SIZE * 0.45; // 16.2px
@@ -97,7 +97,7 @@ export default function Home() {
   const [winner, setWinner] = useState<Country | null>(null);
   const [eliminatedList, setEliminatedList] = useState<Country[]>([]);
   const [speedMult, setSpeedMult] = useState(0.25);
-  const [flagCount, setFlagCount] = useState(20);
+  const [flagCount, setFlagCount] = useState(200);
   const [settingsModalOpen, setSettingsModalOpen] = useState(false);
   const [winnerModalOpen, setWinnerModalOpen] = useState(false);
   const [nextRoundCountdown, setNextRoundCountdown] = useState<number | null>(null);
@@ -150,7 +150,7 @@ export default function Home() {
         y = (Math.random() * 2 - 1) * placementRadius;
       } while (x * x + y * y > placementRadius * placementRadius);
       const angle = Math.random() * 2 * Math.PI;
-      const speed = 0.15 + Math.random() * 0.1;
+      const speed = 0.55 + Math.random() * 0.1;
       return {
         id: `flag-${flagIdRef.current++}`,
         country,
@@ -915,7 +915,7 @@ export default function Home() {
   // Initialize countdown when winner modal opens with loop enabled
   useEffect(() => {
     if (winnerModalOpen && loopEnabled && winner) {
-      setNextRoundCountdown(5);
+      setNextRoundCountdown(3);
     } else {
       setNextRoundCountdown(null);
     }
@@ -942,7 +942,7 @@ export default function Home() {
   return (
     <div className="fixed inset-0 w-full h-full overflow-hidden bg-gray-50 transition-colors dark:bg-gray-950">
       {/* Top bar: Play left, Total rounds center, Settings right */}
-      <div className="fixed top-0 left-0 right-0 z-50 grid grid-cols-3 items-center p-4">
+      <div className="fixed bottom-0 left-0 right-0 z-50 grid grid-cols-3 items-center p-4">
         <div className="flex justify-start">
           {gameState === "idle" && (
             <Button onClick={startGame} className="w-10 h-10 p-0 flex items-center justify-center shrink-0" aria-label="Start Round">
@@ -1149,7 +1149,52 @@ export default function Home() {
       </Modal>
 
       {/* Game arena - starts right after Round count bar */}
-      <div className="absolute top-[-100px] left-0 right-0 bottom-0 flex flex-col items-center justify-center w-full h-full overflow-hidden">
+      <div className="absolute top-[-80px] left-0 right-0 bottom-0 flex flex-col items-center justify-center w-full h-full overflow-hidden">
+
+           {loopEnabled && Object.keys(winnerCounts).length > 0 && (() => {
+          const sorted = Object.entries(winnerCounts).sort(([, a], [, b]) => b - a);
+          const top10Slice = sorted.slice(0, 9);
+          const cutoffWins = top10Slice.length > 0 ? top10Slice[top10Slice.length - 1][1] : 0;
+          // Include ties at 10th place only (not when everyone has same count) - cap at 15 to avoid showing all
+          const tiesAtCutoff = sorted.slice(10).filter(([, wins]) => wins === cutoffWins && wins > 1);
+          const top10Entries = [...top10Slice, ...tiesAtCutoff].slice(0, 15);
+          const top10 = top10Entries
+            .map(([code, wins]) => ({ country: countries.find((c) => c.code === code), wins }))
+            .filter((entry): entry is { country: Country; wins: number } => entry.country != null);
+          return (
+            <div className="fixed top-2 left-0 right-0 z-30 px-1 md:relative md:bottom-auto md:left-auto md:right-auto md:z-auto md:mt-2 md:pb-0 w-full max-w-[min(100vw,100vh)] flex-shrink-0">
+              <div className="dark:bg-amber-950/80 px-3 py-2 mx-auto max-w-[min(100vw,100vh)]">
+                <div className="flex items-center gap-2 mb-1.5 md:mb-2">
+                  {/* <span className="text-xs font-semibold text-amber-800 dark:text-amber-200 uppercase tracking-wide">
+                    🏆 Top 10 winners
+                  </span> */}
+                </div>
+                <div className="grid grid-cols-3 gap-x-1.5 gap-y-0.5">
+                  {top10.map(({ country, wins }, i) => (
+                    <div
+                      key={`${country.code}-${i}`}
+                      className="flex items-center justify-between gap-1.5 rounded-md bg-white/90 dark:bg-gray-800/90 px-1.5 py-0.5 text-xs border border-amber-100 dark:border-amber-800/50"
+                    >
+                      <span className="flex items-center gap-1.5 min-w-0">
+                        <span>{i + 1}.</span>
+                        <span>{country.flag}</span>
+                        <span className="text-gray-700 dark:text-gray-300 font-medium truncate max-w-[70px] sm:max-w-[90px]">
+                          {country.name}
+                        </span>
+                      </span>
+                      <span className="shrink-0 font-semibold text-amber-700 dark:text-amber-300 tabular-nums">
+                        {wins} {wins === 1 ? "x" : "x"}
+                      </span>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            </div>
+          );
+        })()}
+
+
+
         <div className="relative w-full h-full max-w-full max-h-full overflow-hidden flex items-center justify-center">
           <div
             ref={containerRef}
@@ -1200,7 +1245,7 @@ export default function Home() {
                 d={`M ${50 + 42 * Math.cos((gapSize / 2) * Math.PI / 180)} ${50 + 42 * Math.sin((gapSize / 2) * Math.PI / 180)} A 42 42 0 1 1 ${50 + 42 * Math.cos((360 - gapSize / 2) * Math.PI / 180)} ${50 + 42 * Math.sin((360 - gapSize / 2) * Math.PI / 180)}`}
                 fill="none"
                 stroke="rgba(59, 130, 246, 0.9)"
-                strokeWidth="2.5"
+                strokeWidth="2"
                 strokeLinecap="round"
                 strokeLinejoin="round"
                 style={{
@@ -1210,7 +1255,7 @@ export default function Home() {
               />
               {/* Red marker for gap area - exactly matches the gap position */}
               {/* Gap spans from -gapSize/2 to +gapSize/2 degrees around angle 0 before rotation */}
-              <path
+              {/* <path
                 d={`M ${50 + 42 * Math.cos((-gapSize / 2) * Math.PI / 180)} ${50 + 42 * Math.sin((-gapSize / 2) * Math.PI / 180)} A 42 42 0 ${gapSize > 180 ? 1 : 0} 1 ${50 + 42 * Math.cos((gapSize / 2) * Math.PI / 180)} ${50 + 42 * Math.sin((gapSize / 2) * Math.PI / 180)}`}
                 fill="none"
                 stroke="rgba(239, 68, 68, 0.9)"
@@ -1221,9 +1266,9 @@ export default function Home() {
                   transform: "rotate(-90deg)",
                   transformOrigin: "50% 50%",
                 }}
-              />
+              /> */}
               {/* Red indicator dots at gap edges */}
-              <circle
+              {/* <circle
                 cx={50 + 42 * Math.cos((-gapSize / 2) * Math.PI / 180)}
                 cy={50 + 42 * Math.sin((-gapSize / 2) * Math.PI / 180)}
                 r="3.5"
@@ -1242,7 +1287,7 @@ export default function Home() {
                   transform: "rotate(-90deg)",
                   transformOrigin: "50% 50%",
                 }}
-              />
+              /> */}
             </svg>
             {flags
               .filter((f) => !f.eliminated && !f.falling && !f.exiting)
@@ -1308,7 +1353,7 @@ export default function Home() {
             return null;
           })}
           {/* Falling flags rendered outside container */}
-          {flags.map((f) => {
+          {/* {flags.map((f) => {
             if (f.falling && f.fallY !== undefined && f.fallOpacity !== undefined) {
               const container = containerRef.current;
               const containerWidth = container ? container.offsetWidth : 0;
@@ -1373,11 +1418,11 @@ export default function Home() {
               );
             }
             return null;
-          })}
+          })} */}
         </div>
 
         {/* Top 10 winners list - 2 columns with win count, when auto loop is on */}
-        {loopEnabled && Object.keys(winnerCounts).length > 0 && (() => {
+        {/* {loopEnabled && Object.keys(winnerCounts).length > 0 && (() => {
           const sorted = Object.entries(winnerCounts).sort(([, a], [, b]) => b - a);
           const top10Slice = sorted.slice(0, 10);
           const cutoffWins = top10Slice.length > 0 ? top10Slice[top10Slice.length - 1][1] : 0;
@@ -1416,7 +1461,7 @@ export default function Home() {
               </div>
             </div>
           );
-        })()}
+        })()} */}
 
         {/* Winner Modal */}
         <Modal
@@ -1688,7 +1733,7 @@ export default function Home() {
               </motion.div>
             )}
 
-            {eliminatedList.length > 0 && (
+            {/* {eliminatedList.length > 0 && (
               <div className="rounded-xl border border-gray-200 bg-white p-4 dark:border-gray-800 dark:bg-gray-900">
                 <div className="flex items-center gap-2 mb-3 text-sm font-medium text-gray-700 dark:text-gray-300">
                   <Users className="h-4 w-4" />
@@ -1713,7 +1758,7 @@ export default function Home() {
                   )}
                 </div>
               </div>
-            )}
+            )} */}
           </div>
         </Modal>
       </div>
