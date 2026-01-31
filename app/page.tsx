@@ -10,15 +10,19 @@ import {
   RotateCcw,
   Zap,
   Users,
-  Sparkles,
   Settings,
+  Sparkles,
+  Sun,
+  Moon,
 } from "lucide-react";
 import { ToastContainer, useToast } from "@/components/toast";
+import { useTheme } from "@/app/providers/theme-provider";
 
 const DEFAULT_GAP_ANGLE = 35; // Default gap size in degrees
 const LOGICAL_R = 1;
 const BASE_FLAG_SIZE = 50;
-const BASE_SPEED = 0.00035;
+const BASE_SPEED = 0.00015; // 50% of 0.00035 for slower bouncing
+const MIN_BOUNCE_SPEED = 0.15; // Keep bouncing speed from slowing down (50% of previous)
 
 // Calculate flag size based on number of flags
 function getFlagSize(flagCount: number): number {
@@ -99,7 +103,6 @@ export default function Home() {
   const [speedMult, setSpeedMult] = useState(0.25);
   const [flagCount, setFlagCount] = useState(200);
   const [settingsModalOpen, setSettingsModalOpen] = useState(false);
-  const [winnerModalOpen, setWinnerModalOpen] = useState(false);
   const [nextRoundCountdown, setNextRoundCountdown] = useState<number | null>(null);
   const [gapRotation, setGapRotation] = useState(0);
   const [gapRotationEnabled, setGapRotationEnabled] = useState(true);
@@ -118,6 +121,7 @@ export default function Home() {
   const gapDynamicSpeedRef = useRef(1); // Dynamic speed multiplier
   const lastDirectionChangeRef = useRef(0); // Track when direction/speed last changed
   const toast = useToast();
+  const { theme, toggleTheme } = useTheme();
 
   const cx = 0.5;
   const cy = 0.5;
@@ -198,7 +202,9 @@ export default function Home() {
     let nextDirectionChangeTime = lastTime + 2000 + Math.random() * 3000; // First change after 2-5 seconds
 
     const loop = (time: number) => {
-      const dt = Math.min((time - lastTime) * speedMult, 50);
+      // Use full delta so simulation speed stays constant even when FPS drops (e.g. many flags)
+      const rawDt = (time - lastTime) * speedMult;
+      const dt = Math.min(rawDt, 100);
       lastTime = time;
       lastTimeRef.current = time;
 
@@ -225,20 +231,34 @@ export default function Home() {
       setFlags((prev) => {
         const containerEl = containerRef.current;
         const containerHeight = containerEl ? containerEl.offsetHeight : 0;
+        const containerWidth = containerEl ? containerEl.offsetWidth : 0;
         const GRAVITY = 0.0005; // Acceleration per millisecond squared
         const INITIAL_FALL_VELOCITY = 0.1; // Initial fall velocity (pixels per millisecond)
         const MAX_FALL_VELOCITY = 1.2; // Maximum fall velocity
         const ROTATION_SPEED = 0.15; // Rotation speed (degrees per millisecond)
         const FADE_SPEED = 0.0015; // opacity per millisecond
 
-        // Calculate stack bottom position - above the button area and Top 10 panel
+        // Calculate stack bottom position - below the circle area, above the button area
         const screenHeight = window.innerHeight || containerHeight;
+        const screenWidth = window.innerWidth || containerWidth;
         // Button area is fixed at bottom with p-4 (16px padding) and button height (~48px)
-        const isMobile = window.innerWidth < 768;
+        const isMobile = screenWidth < 768;
         const buttonAreaHeight = isMobile ? 80 : 0;
-        // When loop enabled and Top 10 winners is visible, reserve space so falling flags don't overlap it (reduced gap)
-        const top10PanelHeight = (loopEnabled && Object.keys(winnerCounts).length > 0) ? 100 : 0;
-        const stackBottom = screenHeight - buttonAreaHeight - top10PanelHeight;
+        
+        // Calculate the bottom edge of the circle area to prevent overlap
+        // The circle is centered and has radius 0.42 (42% of container)
+        // Container is aspect-square with max size of min(100vw, 100vh)
+        const containerRect = containerEl ? containerEl.getBoundingClientRect() : null;
+        const circleContainerSize = containerRect ? Math.min(containerRect.width, containerRect.height) : Math.min(screenWidth, screenHeight);
+        const circleRadius = circleContainerSize * 0.42;
+        const circleCenterY = containerRect ? containerRect.top + containerRect.height / 2 : screenHeight / 2;
+        const circleBottomEdge = circleCenterY + circleRadius;
+        
+        // Stack flags below the circle with some padding (20px gap from circle)
+        const circleBottomWithPadding = circleBottomEdge + 20;
+        
+        // Use the lower of: screen bottom minus button area, or just above the bottom
+        const stackBottom = screenHeight - buttonAreaHeight;
 
         // Update falling flags - let them stack at the bottom
         // First, process all flags to determine which ones are stacking
@@ -307,11 +327,13 @@ export default function Home() {
             const driftDirection = f.fallDriftX !== undefined ? (f.fallDriftX > 0 ? 1 : -1) : (Math.random() > 0.5 ? 1 : -1);
             const newDriftX = (f.fallDriftX !== undefined ? f.fallDriftX : driftDirection * 0.5) + driftSpeed * dt * driftDirection * (Math.random() - 0.5);
             
-            const containerWidth = containerEl ? containerEl.offsetWidth : 0;
             const containerLeft = containerEl ? containerEl.getBoundingClientRect().left + window.scrollX : 0;
             
+            // Use smaller flag size for stacking (60% of original)
+            const stackFlagSize = Math.floor(flagSize * 0.6);
+            
             // Check if this flag has reached the bottom
-            if (newFallY >= stackBottom - flagSize) {
+            if (newFallY >= stackBottom - stackFlagSize) {
               // Get all already stacked flags
               const alreadyStackedFlags = prev.filter(
                 (other) => 
@@ -321,14 +343,12 @@ export default function Home() {
               );
               
               const alreadyStacked = alreadyStackedFlags.length;
-              
-              const screenWidth = window.innerWidth || containerWidth;
               const screenCenterX = screenWidth / 2;
               
               // Professional grid layout with better spacing
-              const horizontalPadding = Math.max(20, flagSize * 0.5); // Padding from screen edges
+              const horizontalPadding = Math.max(20, stackFlagSize * 0.5); // Padding from screen edges
               const availableWidth = screenWidth - (horizontalPadding * 2);
-              const spacing = flagSize * 1.15; // Slightly more spacing for cleaner look
+              const spacing = stackFlagSize * 1.15; // Slightly more spacing for cleaner look
               const maxFlagsPerRow = Math.max(1, Math.floor(availableWidth / spacing));
               
               // Calculate row and position
@@ -347,21 +367,36 @@ export default function Home() {
               const actualFlagsInRow = Math.min(flagsInSameRow, maxFlagsPerRow);
               
               // Calculate Y position with consistent row height
-              const rowHeight = flagSize * 0.95; // Slightly tighter vertical spacing
-              const rowY = stackBottom - flagSize - (rowIndex * rowHeight);
+              const rowHeight = stackFlagSize * 0.95; // Slightly tighter vertical spacing
+              let rowY = stackBottom - stackFlagSize - (rowIndex * rowHeight);
+              
+              // Clamp rowY so flags don't stack into the circle area
+              // If rowY would be above the circle bottom edge, hide the flag (very low opacity)
+              const isAboveCircle = rowY < circleBottomWithPadding;
+              if (isAboveCircle) {
+                rowY = circleBottomWithPadding; // Clamp to just below circle
+              }
               
               // Calculate X position - center the block of flags in the row (equal space left & right)
-              const gapBetweenFlags = flagSize * 0.15;
-              const rowContentWidth = actualFlagsInRow * flagSize + (actualFlagsInRow - 1) * gapBetweenFlags;
-              const firstFlagCenterX = (screenWidth - rowContentWidth) / 2 + flagSize / 2;
-              const rowX = firstFlagCenterX + positionInRow * (flagSize + gapBetweenFlags);
+              const gapBetweenFlags = stackFlagSize * 0.15;
+              const rowContentWidth = actualFlagsInRow * stackFlagSize + (actualFlagsInRow - 1) * gapBetweenFlags;
+              const firstFlagCenterX = (screenWidth - rowContentWidth) / 2 + stackFlagSize / 2;
+              const rowX = firstFlagCenterX + positionInRow * (stackFlagSize + gapBetweenFlags);
               
-              // Keep opacity visible and consistent
-              const finalOpacity = Math.max(0.75, f.fallOpacity);
+              // Hill shape: lift center of row so stack forms a mound (peak at screen center)
+              const HILL_PEAK = 28;
+              const hillCenterX = screenWidth / 2;
+              const hillRadiusX = screenWidth * 0.42;
+              const distFromCenterX = (rowX - hillCenterX) / (hillRadiusX || 1);
+              const hillOffset = HILL_PEAK * Math.max(0, 1 - distFromCenterX * distFromCenterX);
+              const rowYOnHill = rowY - hillOffset;
+              
+              // Keep opacity visible and consistent - but hide if overlapping circle
+              const finalOpacity = isAboveCircle ? 0 : Math.max(0.75, f.fallOpacity);
               
               return {
                 ...f,
-                fallY: rowY,
+                fallY: rowYOnHill,
                 fallX: rowX,
                 fallOpacity: finalOpacity,
                 fallRotation: 0, // Reset rotation when stacked for clean alignment
@@ -752,20 +787,33 @@ export default function Home() {
           
           return f;
         });
+
+        // Keep bouncing speed from slowing down: enforce minimum velocity (no long-term drift)
+        const finalFlagsWithMinSpeed = finalFlags.map((f) => {
+          if (f.eliminated || f.falling) return f;
+          const speed = Math.sqrt(f.vx * f.vx + f.vy * f.vy);
+          if (speed < MIN_BOUNCE_SPEED && speed > 0.001) {
+            const scale = MIN_BOUNCE_SPEED / speed;
+            return { ...f, vx: f.vx * scale, vy: f.vy * scale };
+          }
+          return f;
+        });
         
         // Recalculate positions for all stacked flags to ensure proper centering
         // Group flags by row and recalculate their positions
         // Reuse existing variables (screenHeight, isMobile, buttonAreaHeight, stackBottom are already defined above)
+        // Use smaller flag size for stacking (60% of original)
+        const recalcStackFlagSize = Math.floor(flagSize * 0.6);
         const recalcScreenWidth = window.innerWidth || (containerEl ? containerEl.offsetWidth : 0);
         const recalcScreenCenterX = recalcScreenWidth / 2;
-        const recalcHorizontalPadding = Math.max(20, flagSize * 0.5);
+        const recalcHorizontalPadding = Math.max(20, recalcStackFlagSize * 0.5);
         const recalcAvailableWidth = recalcScreenWidth - (recalcHorizontalPadding * 2);
-        const recalcSpacing = flagSize * 1.15;
+        const recalcSpacing = recalcStackFlagSize * 1.15;
         const recalcMaxFlagsPerRow = Math.max(1, Math.floor(recalcAvailableWidth / recalcSpacing));
         
         // Group stacked flags by row
-        const flagsByRow = new Map<number, typeof finalFlags>();
-        finalFlags.forEach((f) => {
+        const flagsByRow = new Map<number, typeof finalFlagsWithMinSpeed>();
+        finalFlagsWithMinSpeed.forEach((f) => {
           if (f.stacked && f.eliminatedOrder !== undefined) {
             const rowIndex = Math.floor((f.eliminatedOrder - 1) / recalcMaxFlagsPerRow);
             if (!flagsByRow.has(rowIndex)) {
@@ -776,7 +824,7 @@ export default function Home() {
         });
         
         // Recalculate positions for each row to ensure proper centering
-        const recalculatedFlags = finalFlags.map((f) => {
+        const recalculatedFlags = finalFlagsWithMinSpeed.map((f) => {
           if (f.stacked && f.eliminatedOrder !== undefined) {
             const rowIndex = Math.floor((f.eliminatedOrder - 1) / recalcMaxFlagsPerRow);
             const rowFlags = flagsByRow.get(rowIndex) || [];
@@ -785,19 +833,41 @@ export default function Home() {
             const actualFlagsInRow = sortedRowFlags.length;
             
             if (positionInRow >= 0) {
-              const rowHeight = flagSize * 0.95;
-              const rowY = stackBottom - flagSize - (rowIndex * rowHeight);
+              const rowHeight = recalcStackFlagSize * 0.95;
+              let rowY = stackBottom - recalcStackFlagSize - (rowIndex * rowHeight);
+              
+              // Clamp rowY so flags don't stack into the circle area
+              const isAboveCircle = rowY < circleBottomWithPadding;
+              if (isAboveCircle) {
+                rowY = circleBottomWithPadding;
+              }
               
               // Center the block of flags in the row (equal space left & right)
-              const gapBetweenFlags = flagSize * 0.15;
-              const rowContentWidth = actualFlagsInRow * flagSize + (actualFlagsInRow - 1) * gapBetweenFlags;
-              const firstFlagCenterX = (recalcScreenWidth - rowContentWidth) / 2 + flagSize / 2;
-              const rowX = firstFlagCenterX + positionInRow * (flagSize + gapBetweenFlags);
+              const gapBetweenFlags = recalcStackFlagSize * 0.15;
+              const rowContentWidth = actualFlagsInRow * recalcStackFlagSize + (actualFlagsInRow - 1) * gapBetweenFlags;
+              const firstFlagCenterX = (recalcScreenWidth - rowContentWidth) / 2 + recalcStackFlagSize / 2;
+              const rowX = firstFlagCenterX + positionInRow * (recalcStackFlagSize + gapBetweenFlags);
+              
+              // Hill shape: 2D mound (peak at screen center and middle row)
+              const HILL_PEAK_X = 28;
+              const HILL_PEAK_Y = 14;
+              const hillCenterX = recalcScreenWidth / 2;
+              const hillRadiusX = recalcScreenWidth * 0.42;
+              const totalRows = flagsByRow.size;
+              const centerRow = (totalRows - 1) / 2;
+              const radiusRow = Math.max(1, totalRows * 0.5);
+              const distFromCenterX = (rowX - hillCenterX) / (hillRadiusX || 1);
+              const horizontalFactor = Math.max(0, 1 - distFromCenterX * distFromCenterX);
+              const distFromCenterRow = (rowIndex - centerRow) / radiusRow;
+              const verticalFactor = Math.max(0, 1 - distFromCenterRow * distFromCenterRow);
+              const hillOffset = HILL_PEAK_X * horizontalFactor + HILL_PEAK_Y * verticalFactor;
+              const rowYOnHill = rowY - hillOffset;
               
               return {
                 ...f,
                 fallX: rowX,
-                fallY: rowY,
+                fallY: rowYOnHill,
+                fallOpacity: isAboveCircle ? 0 : f.fallOpacity, // Hide if overlapping circle
               };
             }
           }
@@ -808,10 +878,9 @@ export default function Home() {
         const active = recalculatedFlags.filter((f) => !f.eliminated && !f.falling && !f.exiting);
         const prevActiveCount = prev.filter((f) => !f.eliminated && !f.falling && !f.exiting).length;
         
-        // Show modal when 2nd-to-last flag is eliminated (when going from 2 to 1)
+        // Game over when 2nd-to-last flag is eliminated (when going from 2 to 1)
         if (active.length === 1 && prevActiveCount === 2) {
           setWinner(active[0].country);
-          setWinnerModalOpen(true);
           setGameState("finished");
           return recalculatedFlags;
         }
@@ -890,12 +959,7 @@ export default function Home() {
     }
   }, [flagCount, gameState, flagSize]);
 
-  // Open winner modal when winner is set
-  useEffect(() => {
-    if (winner && gameState === "finished") {
-      setWinnerModalOpen(true);
-    }
-  }, [winner, gameState]);
+  // No modal - congratulations shown inside circle
 
   const prevGameStateRef = useRef<GameState>(gameState);
   // When round finishes: increment total rounds and (if loop) winner win count
@@ -912,14 +976,14 @@ export default function Home() {
     }
   }, [gameState, loopEnabled, winner]);
 
-  // Initialize countdown when winner modal opens with loop enabled
+  // Initialize countdown when round finishes with loop enabled
   useEffect(() => {
-    if (winnerModalOpen && loopEnabled && winner) {
+    if (gameState === "finished" && loopEnabled && winner) {
       setNextRoundCountdown(3);
     } else {
       setNextRoundCountdown(null);
     }
-  }, [winnerModalOpen, loopEnabled, winner]);
+  }, [gameState, loopEnabled, winner]);
 
   // Countdown tick - start next round when it reaches 0
   useEffect(() => {
@@ -928,7 +992,6 @@ export default function Home() {
     const timer = setTimeout(() => {
       setNextRoundCountdown((prev) => {
         if (prev === null || prev <= 1) {
-          setWinnerModalOpen(false);
           setTimeout(() => startGame(), 300);
           return null;
         }
@@ -957,7 +1020,6 @@ export default function Home() {
                 if (active.length > 0) {
                   const chosen = active[Math.floor(Math.random() * active.length)];
                   setWinner(chosen.country);
-                  setWinnerModalOpen(true);
                 }
                 setGameState("finished");
               }}
@@ -978,7 +1040,14 @@ export default function Home() {
             Round {totalRounds}
           </span>
         </div>
-        <div className="flex justify-end">
+        <div className="flex justify-end items-center gap-2">
+          <button
+            onClick={toggleTheme}
+            className="rounded-lg p-2 bg-white/90 dark:bg-gray-800/90 shadow border border-gray-200 dark:border-gray-700 text-gray-500 transition-colors hover:bg-gray-100 hover:text-gray-900 dark:text-gray-400 dark:hover:bg-gray-700 dark:hover:text-white"
+            aria-label={theme === "light" ? "Switch to dark mode" : "Switch to light mode"}
+          >
+            {theme === "light" ? <Moon className="h-5 w-5" /> : <Sun className="h-5 w-5" />}
+          </button>
           <button
             // onClick={() => setSettingsModalOpen(true)}
             className="rounded-lg p-2 bg-white/90 dark:bg-gray-800/90 shadow border border-gray-200 dark:border-gray-700 text-gray-500 transition-colors hover:bg-gray-100 hover:text-gray-900 dark:text-gray-400 dark:hover:bg-gray-700 dark:hover:text-white"
@@ -1153,24 +1222,16 @@ export default function Home() {
 
            {loopEnabled && Object.keys(winnerCounts).length > 0 && (() => {
           const sorted = Object.entries(winnerCounts).sort(([, a], [, b]) => b - a);
-          const top10Slice = sorted.slice(0, 9);
-          const cutoffWins = top10Slice.length > 0 ? top10Slice[top10Slice.length - 1][1] : 0;
-          // Include ties at 10th place only (not when everyone has same count) - cap at 15 to avoid showing all
-          const tiesAtCutoff = sorted.slice(10).filter(([, wins]) => wins === cutoffWins && wins > 1);
-          const top10Entries = [...top10Slice, ...tiesAtCutoff].slice(0, 15);
-          const top10 = top10Entries
+          const top9Slice = sorted.slice(0, 9);
+          const top9 = top9Slice
             .map(([code, wins]) => ({ country: countries.find((c) => c.code === code), wins }))
             .filter((entry): entry is { country: Country; wins: number } => entry.country != null);
           return (
-            <div className="fixed top-2 left-0 right-0 z-30 px-1 md:relative md:bottom-auto md:left-auto md:right-auto md:z-auto md:mt-2 md:pb-0 w-full max-w-[min(100vw,100vh)] flex-shrink-0">
-              <div className="dark:bg-amber-950/80 px-3 py-2 mx-auto max-w-[min(100vw,100vh)]">
-                <div className="flex items-center gap-2 mb-1.5 md:mb-2">
-                  {/* <span className="text-xs font-semibold text-amber-800 dark:text-amber-200 uppercase tracking-wide">
-                    🏆 Top 10 winners
-                  </span> */}
-                </div>
-                <div className="grid grid-cols-3 gap-x-1.5 gap-y-0.5">
-                  {top10.map(({ country, wins }, i) => (
+            <div className="fixed top-4 left-0 right-0 z-30 px-1 md:relative md:bottom-auto md:left-auto md:right-auto md:z-auto md:mt-2 md:pb-0 w-full max-w-[min(100vw,100vh)] flex-shrink-0 pointer-events-none">
+              <div className="dark:bg-amber-950/80 px-3 py-2 mx-auto max-w-[min(100vw,100vh)] pointer-events-auto">
+                {/* Top 9 in 3 columns: col1 = 1,2,3 | col2 = 4,5,6 | col3 = 7,8,9 */}
+                <div className="grid grid-cols-3 grid-rows-3 grid-flow-col gap-x-2 gap-y-0.5">
+                  {top9.map(({ country, wins }, i) => (
                     <div
                       key={`${country.code}-${i}`}
                       className="flex items-center justify-between gap-1.5 rounded-md bg-white/90 dark:bg-gray-800/90 px-1.5 py-0.5 text-xs border border-amber-100 dark:border-amber-800/50"
@@ -1253,41 +1314,6 @@ export default function Home() {
                   transformOrigin: "50% 50%",
                 }}
               />
-              {/* Red marker for gap area - exactly matches the gap position */}
-              {/* Gap spans from -gapSize/2 to +gapSize/2 degrees around angle 0 before rotation */}
-              {/* <path
-                d={`M ${50 + 42 * Math.cos((-gapSize / 2) * Math.PI / 180)} ${50 + 42 * Math.sin((-gapSize / 2) * Math.PI / 180)} A 42 42 0 ${gapSize > 180 ? 1 : 0} 1 ${50 + 42 * Math.cos((gapSize / 2) * Math.PI / 180)} ${50 + 42 * Math.sin((gapSize / 2) * Math.PI / 180)}`}
-                fill="none"
-                stroke="rgba(239, 68, 68, 0.9)"
-                strokeWidth="5"
-                strokeLinecap="round"
-                opacity="0.9"
-                style={{
-                  transform: "rotate(-90deg)",
-                  transformOrigin: "50% 50%",
-                }}
-              /> */}
-              {/* Red indicator dots at gap edges */}
-              {/* <circle
-                cx={50 + 42 * Math.cos((-gapSize / 2) * Math.PI / 180)}
-                cy={50 + 42 * Math.sin((-gapSize / 2) * Math.PI / 180)}
-                r="3.5"
-                fill="rgba(239, 68, 68, 1)"
-                style={{
-                  transform: "rotate(-90deg)",
-                  transformOrigin: "50% 50%",
-                }}
-              />
-              <circle
-                cx={50 + 42 * Math.cos((gapSize / 2) * Math.PI / 180)}
-                cy={50 + 42 * Math.sin((gapSize / 2) * Math.PI / 180)}
-                r="3.5"
-                fill="rgba(239, 68, 68, 1)"
-                style={{
-                  transform: "rotate(-90deg)",
-                  transformOrigin: "50% 50%",
-                }}
-              /> */}
             </svg>
             {flags
               .filter((f) => !f.eliminated && !f.falling && !f.exiting)
@@ -1308,459 +1334,240 @@ export default function Home() {
                   {f.country.flag}
                 </motion.div>
               ))}
-          </div>
-        </div>
 
-        {/* Exiting & falling flags - fixed overlay (viewport coords) so they don't clip when Top 10 is visible */}
-        <div className="fixed inset-0 pointer-events-none z-20">
-          {flags.map((f) => {
-            if (f.exiting && f.exitX !== undefined && f.exitY !== undefined && f.exitStartTime !== undefined) {
-              const exitDuration = 300;
-              const elapsed = performance.now() - f.exitStartTime;
-              const progress = Math.min(elapsed / exitDuration, 1);
-              
-              // Smooth easing for exit animation
-              const easeOutCubic = 1 - Math.pow(1 - progress, 3);
-              // Velocity is in pixels per ms, elapsed is in ms
-              const currentExitX = f.exitX + (f.exitVelocityX || 0) * elapsed * easeOutCubic;
-              const currentExitY = f.exitY + (f.exitVelocityY || 0) * elapsed * easeOutCubic;
-              
-              // Scale and rotation during exit for professional effect
-              const exitScale = 1 + progress * 0.15; // Slightly grow as it exits (more visible)
-              const exitRotation = (f.exitVelocityX || 0) > 0 ? progress * 25 : progress * -25; // Rotate based on direction
-              const exitOpacity = 1 - progress * 0.1; // Very slight fade
-              
-              return (
-                <motion.div
-                  key={`exiting-${f.id}-${f.eliminatedOrder}`}
-                  className="absolute flex items-center justify-center rounded-lg pointer-events-none z-50"
-                  style={{
-                    width: flagSize,
-                    height: flagSize,
-                    left: currentExitX,
-                    top: currentExitY,
-                    transform: `translate(-50%, -50%) rotate(${exitRotation}deg) scale(${exitScale})`,
-                    transformOrigin: 'center center',
-                    opacity: exitOpacity,
-                    transition: 'transform 0.05s linear, opacity 0.05s linear',
-                  }}
-                  initial={false}
-                >
-                  {f.country.flag}
-                </motion.div>
-              );
-            }
-            return null;
-          })}
-          {/* Falling flags rendered outside container */}
-          {/* {flags.map((f) => {
-            if (f.falling && f.fallY !== undefined && f.fallOpacity !== undefined) {
-              const container = containerRef.current;
-              const containerWidth = container ? container.offsetWidth : 0;
-              const containerRect = container ? container.getBoundingClientRect() : null;
-              // Use fallX if available (set when flag exits), otherwise convert from container coords to viewport
-              let fallX = f.fallX !== undefined 
-                ? f.fallX 
-                : (containerRect ? containerRect.left : 0) + containerWidth * (cx + f.x * scale);
-              
-              // Ensure flags stay within viewport
-              const screenWidth = window.innerWidth || containerWidth;
-              const padding = flagSize / 2;
-              fallX = Math.max(padding, Math.min(screenWidth - padding, fallX));
-              const stackDelay = f.eliminatedOrder ? (f.eliminatedOrder - 1) * 0.1 : 0;
-              
-              // Calculate scale based on fall velocity (slight zoom out effect)
-              const fallScale = f.stacked ? 1 : Math.max(0.85, 1 - (f.fallVelocity || 0) * 0.1);
-              const rotation = f.stacked ? 0 : (f.fallRotation !== undefined ? f.fallRotation : 0); // No rotation when stacked
-              const driftX = f.stacked ? 0 : (f.fallDriftX !== undefined ? f.fallDriftX * 20 : 0); // No drift when stacked
-              const adjustedFallX = f.stacked ? fallX : fallX + driftX;
-              
-              return (
-                <motion.div
-                  key={`falling-${f.id}-${f.eliminatedOrder}`}
-                  className="absolute flex items-center justify-center rounded-lg pointer-events-none"
-                  style={{
-                    width: flagSize,
-                    height: flagSize,
-                    fontSize: `${emojiSize}px`,
-                    left: `${adjustedFallX}px`,
-                    top: `${f.fallY}px`,
-                    opacity: f.fallOpacity,
-                    transform: `translate(-50%, -50%) rotate(${rotation}deg) scale(${fallScale})`,
-                    transformOrigin: 'center center',
-                    transition: f.stacked 
-                      ? 'left 0.3s cubic-bezier(0.4, 0, 0.2, 1), top 0.3s cubic-bezier(0.4, 0, 0.2, 1), transform 0.3s cubic-bezier(0.4, 0, 0.2, 1), opacity 0.2s ease-out'
-                      : 'transform 0.05s linear, opacity 0.1s ease-out',
-                    willChange: f.stacked ? 'transform, left, top' : 'transform, opacity',
-                  }}
-                  initial={false}
-                  animate={
-                    f.stacked
-                      ? {
-                          y: [0, -6, 0],
-                          scale: [1, 1.03, 1],
-                        }
-                      : {}
-                  }
-                  transition={
-                    f.stacked
-                      ? {
-                          duration: 0.8,
-                          delay: stackDelay * 0.5, // Reduced delay for smoother appearance
-                          repeat: Infinity,
-                          ease: "easeInOut",
-                        }
-                      : {}
-                  }
-                >
-                  {f.country.flag}
-                </motion.div>
-              );
-            }
-            return null;
-          })} */}
-        </div>
-
-        {/* Top 10 winners list - 2 columns with win count, when auto loop is on */}
-        {/* {loopEnabled && Object.keys(winnerCounts).length > 0 && (() => {
-          const sorted = Object.entries(winnerCounts).sort(([, a], [, b]) => b - a);
-          const top10Slice = sorted.slice(0, 10);
-          const cutoffWins = top10Slice.length > 0 ? top10Slice[top10Slice.length - 1][1] : 0;
-          // Include ties at 10th place only (not when everyone has same count) - cap at 15 to avoid showing all
-          const tiesAtCutoff = sorted.slice(10).filter(([, wins]) => wins === cutoffWins && wins > 1);
-          const top10Entries = [...top10Slice, ...tiesAtCutoff].slice(0, 15);
-          const top10 = top10Entries
-            .map(([code, wins]) => ({ country: countries.find((c) => c.code === code), wins }))
-            .filter((entry): entry is { country: Country; wins: number } => entry.country != null);
-          return (
-            <div className="fixed bottom-4 left-0 right-0 z-30 px-3 md:relative md:bottom-auto md:left-auto md:right-auto md:z-auto md:mt-2 md:pb-0 w-full max-w-[min(100vw,100vh)] flex-shrink-0">
-              <div className="rounded-xl border border-amber-200/80 dark:border-amber-700/50 bg-amber-50/95 dark:bg-amber-950/80 shadow-md backdrop-blur-sm px-3 py-2 mx-auto max-w-[min(100vw,100vh)]">
-                <div className="flex items-center gap-2 mb-1.5 md:mb-2">
-                  <span className="text-xs font-semibold text-amber-800 dark:text-amber-200 uppercase tracking-wide">
-                    🏆 Top 10 winners
-                  </span>
-                </div>
-                <div className="grid grid-cols-2 gap-x-1.5 gap-y-0.5">
-                  {top10.map(({ country, wins }, i) => (
-                    <div
-                      key={`${country.code}-${i}`}
-                      className="flex items-center justify-between gap-1.5 rounded-md bg-white/90 dark:bg-gray-800/90 px-1.5 py-0.5 text-xs border border-amber-100 dark:border-amber-800/50"
-                    >
-                      <span className="flex items-center gap-1.5 min-w-0">
-                        <span>{country.flag}</span>
-                        <span className="text-gray-700 dark:text-gray-300 font-medium truncate max-w-[70px] sm:max-w-[90px]">
-                          {country.name}
-                        </span>
-                      </span>
-                      <span className="shrink-0 font-semibold text-amber-700 dark:text-amber-300 tabular-nums">
-                        {wins} {wins === 1 ? "win" : "wins"}
-                      </span>
-                    </div>
-                  ))}
-                </div>
-              </div>
-            </div>
-          );
-        })()} */}
-
-        {/* Winner Modal */}
-        <Modal
-          isOpen={winnerModalOpen}
-          onClose={() => setWinnerModalOpen(false)}
-          title=""
-          size="lg"
-          hideHeader
-        >
-          <div className="space-y-6 relative overflow-hidden">
-            {/* Enhanced Confetti particles */}
-            {winner && (
-              <div className="absolute inset-0 pointer-events-none overflow-hidden -z-10">
-                {[...Array(80)].map((_, i) => {
-                  const colors = [
-                    "bg-yellow-400",
-                    "bg-red-400",
-                    "bg-blue-400",
-                    "bg-green-400",
-                    "bg-purple-400",
-                    "bg-pink-400",
-                    "bg-orange-400",
-                    "bg-indigo-400",
-                  ];
-                  const color = colors[Math.floor(Math.random() * colors.length)];
-                  const left = `${Math.random() * 100}%`;
-                  const delay = Math.random() * 3;
-                  const duration = 1.5 + Math.random() * 2.5;
-                  const xOffset = (Math.random() - 0.5) * 300;
-                  const size = Math.random() * 8 + 4;
-                  const shape = Math.random() > 0.5 ? "rounded-full" : "rounded-sm";
-                  const rotation = Math.random() * 720 - 360;
-                  
-                  return (
-                    <motion.div
-                      key={i}
-                      className={`absolute ${color} ${shape}`}
-                      style={{
-                        left,
-                        width: `${size}px`,
-                        height: `${size}px`,
-                      }}
-                      initial={{
-                        y: -30,
-                        x: 0,
-                        opacity: 1,
-                        rotate: 0,
-                        scale: 1,
-                      }}
-                      animate={{
-                        y: 700,
-                        x: xOffset,
-                        opacity: [1, 1, 0.8, 0],
-                        rotate: rotation,
-                        scale: [1, 1.2, 0.8, 0],
-                      }}
-                      transition={{
-                        duration,
-                        delay,
-                        repeat: Infinity,
-                        ease: [0.25, 0.46, 0.45, 0.94],
-                      }}
-                    />
-                  );
-                })}
-              </div>
-            )}
-
-            {/* Burst effect on open */}
-            {winner && (
+            {/* Congratulations inside circle when round finished - with celebration */}
+            {gameState === "finished" && winner && (
               <motion.div
-                className="absolute inset-0 pointer-events-none"
-                initial={{ scale: 0, opacity: 1 }}
-                animate={{ scale: 3, opacity: 0 }}
-                transition={{ duration: 0.8, ease: "easeOut" }}
-              >
-                <div className="absolute inset-0 bg-gradient-radial from-yellow-400/30 via-amber-300/20 to-transparent rounded-full" />
-              </motion.div>
-            )}
-
-            {winner && (
-              <motion.div
-                initial={{ opacity: 0, scale: 0.8 }}
+                initial={{ opacity: 0, scale: 0.9 }}
                 animate={{ opacity: 1, scale: 1 }}
-                transition={{ duration: 0.5, ease: "easeOut" }}
-                className="relative flex flex-col items-center gap-3 sm:gap-4 rounded-2xl border-2 border-amber-300 bg-gradient-to-br from-amber-50 to-yellow-50 dark:border-amber-600 dark:from-amber-900/30 dark:to-yellow-900/20 px-4 py-6 sm:px-6 sm:py-7 md:px-8 md:py-8 overflow-hidden"
+                transition={{ duration: 0.4, ease: "easeOut" }}
+                className="absolute inset-0 flex flex-col items-center justify-center gap-2 sm:gap-3 p-4 pointer-events-none z-10 overflow-hidden rounded-3xl"
               >
-                {/* Animated background glow */}
-                <motion.div
-                  className="absolute inset-0 bg-gradient-to-r from-yellow-400/20 via-amber-300/30 to-yellow-400/20"
-                  animate={{
-                    x: ["-100%", "100%"],
-                  }}
-                  transition={{
-                    duration: 3,
-                    repeat: Infinity,
-                    ease: "linear",
-                  }}
-                />
+                {/* Celebration confetti inside circle */}
+                <div className="absolute inset-0 pointer-events-none">
+                  {[...Array(40)].map((_, i) => {
+                    const colors = ["bg-yellow-400", "bg-red-400", "bg-blue-400", "bg-green-400", "bg-purple-400", "bg-pink-400", "bg-amber-400", "bg-indigo-400"];
+                    const color = colors[i % colors.length];
+                    const left = `${(i * 13) % 100}%`;
+                    const delay = (i * 0.05) % 2;
+                    const duration = 1.2 + (i % 3) * 0.4;
+                    const size = 4 + (i % 5);
+                    const shape = i % 2 === 0 ? "rounded-full" : "rounded-sm";
+                    const rotation = (i * 90) % 360;
+                    return (
+                      <motion.div
+                        key={i}
+                        className={`absolute ${color} ${shape}`}
+                        style={{ left, width: size, height: size, top: -10 }}
+                        initial={{ y: 0, opacity: 1, rotate: 0, scale: 1 }}
+                        animate={{
+                          y: 120,
+                          opacity: [1, 1, 0.6, 0],
+                          rotate: rotation,
+                          scale: [1, 1.1, 0.8],
+                        }}
+                        transition={{ duration, delay, repeat: Infinity, repeatDelay: 0.5, ease: "easeIn" }}
+                      />
+                    );
+                  })}
+                </div>
 
-                {/* Enhanced Sparkle effects */}
-                {[...Array(16)].map((_, i) => {
-                  const angle = (i * 360) / 16;
-                  const radius = 100 + Math.sin(i) * 20;
-                  const x = Math.cos((angle * Math.PI) / 180) * radius;
-                  const y = Math.sin((angle * Math.PI) / 180) * radius;
+                {/* Burst / glow on appear */}
+                <motion.div
+                  className="absolute inset-0 pointer-events-none"
+                  initial={{ scale: 0, opacity: 0.8 }}
+                  animate={{ scale: 2, opacity: 0 }}
+                  transition={{ duration: 0.7, ease: "easeOut" }}
+                >
+                  <div className="absolute inset-0 bg-gradient-radial from-yellow-400/40 via-amber-300/20 to-transparent rounded-full" />
+                </motion.div>
+
+                {/* Sparkles around center */}
+                {[...Array(12)].map((_, i) => {
+                  const angle = (i / 12) * 360;
+                  const r = 22 + (i % 2) * 5;
+                  const x = Math.cos((angle * Math.PI) / 180) * r;
+                  const y = Math.sin((angle * Math.PI) / 180) * r;
                   return (
                     <motion.div
                       key={i}
-                      className="absolute"
-                      style={{
-                        left: `calc(50% + ${x}px)`,
-                        top: `calc(50% + ${y}px)`,
-                      }}
-                      initial={{ scale: 0, opacity: 0, rotate: 0 }}
-                      animate={{
-                        scale: [0, 1.5, 0],
-                        opacity: [0, 1, 0],
-                        rotate: [0, 180, 360],
-                      }}
-                      transition={{
-                        duration: 2.5,
-                        delay: i * 0.08,
-                        repeat: Infinity,
-                        ease: "easeInOut",
-                      }}
+                      className="absolute -translate-x-1/2 -translate-y-1/2"
+                      style={{ left: `calc(50% + ${x}%)`, top: `calc(50% + ${y}%)` }}
+                      initial={{ scale: 0, opacity: 0 }}
+                      animate={{ scale: [0, 1.2, 0.8], opacity: [0, 1, 0.7] }}
+                      transition={{ duration: 1.5, delay: i * 0.06, repeat: Infinity, repeatDelay: 0.3, ease: "easeInOut" }}
                     >
-                      <Sparkles className="h-5 w-5 text-amber-400 drop-shadow-lg" />
+                      <Sparkles className="h-4 w-4 sm:h-5 sm:w-5 text-amber-400 drop-shadow" />
                     </motion.div>
                   );
                 })}
 
-                {/* Enhanced Celebration text */}
-                <motion.div
-                  initial={{ scale: 0, rotate: -180, opacity: 0 }}
-                  animate={{ scale: 1, rotate: 0, opacity: 1 }}
-                  transition={{
-                    type: "spring",
-                    stiffness: 300,
-                    damping: 20,
-                    delay: 0.2,
-                  }}
-                  className="relative"
+                <motion.p
+                  initial={{ opacity: 0, y: 8 }}
+                  animate={{ opacity: 1, y: 0 }}
+                  transition={{ delay: 0.15 }}
+                  className="text-base sm:text-lg md:text-xl font-bold bg-gradient-to-r from-amber-600 to-yellow-500 bg-clip-text text-transparent relative z-10"
                 >
-                  <motion.h2
-                    animate={{
-                      backgroundPosition: ["0%", "100%"],
-                    }}
-                    transition={{
-                      duration: 3,
-                      repeat: Infinity,
-                      ease: "linear",
-                    }}
-                    className="text-xl sm:text-2xl md:text-3xl lg:text-4xl font-bold bg-gradient-to-r from-amber-600 via-yellow-500 via-amber-400 to-amber-600 bg-[length:200%_auto] bg-clip-text text-transparent"
-                    style={{ backgroundPosition: "0%" }}
-                  >
-                    🎉 Congratulations! 🎉
-                  </motion.h2>
-                  {/* Text glow effect */}
-                  <motion.div
-                    className="absolute inset-0 blur-xl opacity-50"
-                    animate={{ opacity: [0.3, 0.6, 0.3] }}
-                    transition={{ duration: 2, repeat: Infinity }}
-                  >
-                    <h2 className="text-xl sm:text-2xl md:text-3xl lg:text-4xl font-bold bg-gradient-to-r from-amber-600 via-yellow-500 to-amber-600 bg-clip-text text-transparent">
-                      🎉 Congratulations! 🎉
-                    </h2>
-                  </motion.div>
-                </motion.div>
-
-                {/* Enhanced Winner display */}
+                  🎉 Congratulations! 🎉
+                </motion.p>
                 <motion.div
-                  initial={{ scale: 0, y: 50, opacity: 0 }}
-                  animate={{ scale: 1, y: 0, opacity: 1 }}
-                  transition={{
-                    delay: 0.4,
-                    type: "spring",
-                    stiffness: 250,
-                    damping: 20,
-                  }}
-                  className="flex flex-col items-center gap-3 relative z-10"
+                  initial={{ scale: 0, opacity: 0 }}
+                  animate={{ scale: 1, opacity: 1 }}
+                  transition={{ delay: 0.25, type: "spring", stiffness: 200, damping: 18 }}
+                  className="flex flex-col items-center gap-1 relative z-10"
                 >
-                  {/* Flag with enhanced animation */}
-                  <motion.div
-                    className="relative"
-                    animate={{
-                      scale: [1, 1.15, 1],
-                      rotate: [0, 10, -10, 0],
-                      y: [0, -10, 0],
-                    }}
-                    transition={{
-                      duration: 2.5,
-                      repeat: Infinity,
-                      ease: "easeInOut",
-                    }}
-                  >
-                    {/* Flag glow */}
-                    <motion.div
-                      className="absolute inset-0 blur-2xl opacity-60"
-                      animate={{ scale: [1, 1.3, 1], opacity: [0.4, 0.7, 0.4] }}
-                      transition={{ duration: 2, repeat: Infinity }}
-                    >
-                      <span className="text-4xl sm:text-5xl md:text-6xl">{winner.flag}</span>
-                    </motion.div>
-                    <span className="text-5xl sm:text-6xl md:text-7xl relative z-10 drop-shadow-lg">
-                      {winner.flag}
-                    </span>
-                  </motion.div>
-
-                  {/* Winner name with slide-in */}
                   <motion.span
-                    initial={{ opacity: 0, x: -50 }}
-                    animate={{ opacity: 1, x: 0 }}
-                    transition={{
-                      delay: 0.6,
-                      type: "spring",
-                      stiffness: 200,
-                      damping: 15,
-                    }}
-                    className="text-xl sm:text-2xl md:text-3xl font-bold text-gray-900 dark:text-white drop-shadow-sm"
+                    animate={{ scale: [1, 1.08, 1], rotate: [0, 5, -5, 0] }}
+                    transition={{ duration: 2, repeat: Infinity, ease: "easeInOut" }}
+                    className="text-3xl sm:text-4xl md:text-5xl drop-shadow-md inline-block"
                   >
-                    {winner.name}
+                    {winner.flag}
                   </motion.span>
-
-                  {/* Round Winner badge */}
-                  <motion.div
-                    initial={{ opacity: 0, scale: 0 }}
-                    animate={{ opacity: 1, scale: 1 }}
-                    transition={{
-                      delay: 0.8,
-                      type: "spring",
-                      stiffness: 200,
-                      damping: 15,
-                    }}
-                    className="relative"
-                  >
-                    <motion.div
-                      animate={{
-                        scale: [1, 1.05, 1],
-                      }}
-                      transition={{
-                        duration: 2,
-                        repeat: Infinity,
-                        ease: "easeInOut",
-                      }}
-                      className="px-3 py-1.5 sm:px-4 sm:py-2 rounded-full bg-gradient-to-r from-amber-200 to-yellow-200 dark:from-amber-800 dark:to-yellow-800 border-2 border-amber-400 dark:border-amber-600"
-                    >
-                      <span className="text-sm sm:text-base md:text-lg font-semibold text-amber-900 dark:text-amber-100">
-                        🏆 Round Winner 🏆
-                      </span>
-                    </motion.div>
-                  </motion.div>
+                  <span className="text-sm sm:text-base md:text-lg font-bold text-gray-900 dark:text-white">
+                    {winner.name}
+                  </span>
+                  <span className="text-xs sm:text-sm font-semibold text-amber-700 dark:text-amber-300">
+                    🏆 Round Winner 🏆
+                  </span>
                 </motion.div>
+                {loopEnabled && nextRoundCountdown !== null && (
+                  <motion.div
+                    initial={{ opacity: 0 }}
+                    animate={{ opacity: 1 }}
+                    transition={{ delay: 0.4 }}
+                    className="flex flex-col items-center mt-1 relative z-10"
+                  >
+                    <p className="text-xs sm:text-sm text-gray-600 dark:text-gray-400">Next round in</p>
+                    <p className="text-2xl sm:text-3xl font-bold text-amber-600 dark:text-amber-400 tabular-nums">
+                      {nextRoundCountdown}
+                    </p>
+                  </motion.div>
+                )}
               </motion.div>
             )}
-
-            {loopEnabled && nextRoundCountdown !== null && (
-              <motion.div
-                initial={{ opacity: 0 }}
-                animate={{ opacity: 1 }}
-                className="flex flex-col items-center py-4"
-              >
-                <p className="text-lg font-medium text-gray-700 dark:text-gray-300">
-                  Next round in
-                </p>
-                <p className="text-4xl font-bold text-amber-600 dark:text-amber-400 tabular-nums mt-1">
-                  {nextRoundCountdown}
-                </p>
-              </motion.div>
-            )}
-
-            {/* {eliminatedList.length > 0 && (
-              <div className="rounded-xl border border-gray-200 bg-white p-4 dark:border-gray-800 dark:bg-gray-900">
-                <div className="flex items-center gap-2 mb-3 text-sm font-medium text-gray-700 dark:text-gray-300">
-                  <Users className="h-4 w-4" />
-                  Eliminated (first out → last out)
-                </div>
-                <div className="flex flex-wrap gap-1.5">
-                  {eliminatedList.slice(0, 10).map((c, i) => (
-                    <span
-                      key={`${c.code}-${i}`}
-                      className="inline-flex items-center gap-1 rounded-md bg-gray-100 px-2 py-0.5 text-xs dark:bg-gray-800"
-                    >
-                      <span>{c.flag}</span>
-                      <span className="text-gray-600 dark:text-gray-400">
-                        {c.name}
-                      </span>
-                    </span>
-                  ))}
-                  {eliminatedList.length > 10 && (
-                    <span className="inline-flex items-center rounded-md bg-gray-200 px-2 py-0.5 text-xs font-medium text-gray-700 dark:bg-gray-700 dark:text-gray-300">
-                      +{eliminatedList.length - 10} more
-                    </span>
-                  )}
-                </div>
-              </div>
-            )} */}
           </div>
-        </Modal>
+        </div>
+
+
+      </div>
+
+      {/* Exiting & falling flags - viewport overlay with depth, shadows, and advanced easing */}
+      <div className="fixed inset-0 pointer-events-none z-40 isolate">
+        {/* Exiting flags: fly-out with depth shadow and smooth easing */}
+        {flags
+          .filter((f): f is typeof f & { exitX: number; exitY: number; exitStartTime: number } =>
+            Boolean(f.exiting && f.exitX != null && f.exitY != null && f.exitStartTime != null)
+          )
+          .map((f) => {
+            const exitDuration = 320;
+            const elapsed = performance.now() - f.exitStartTime;
+            const t = Math.min(elapsed / exitDuration, 1);
+            const easeOutExpo = t >= 1 ? 1 : 1 - Math.pow(2, -10 * t);
+            const easeOutCubic = 1 - Math.pow(1 - t, 3);
+            const vx = f.exitVelocityX ?? 0;
+            const vy = f.exitVelocityY ?? 0;
+            const currentExitX = f.exitX + vx * elapsed * 0.5 * easeOutExpo;
+            const currentExitY = f.exitY + vy * elapsed * 0.5 * easeOutExpo;
+            const exitScale = 1 + easeOutCubic * 0.2;
+            const exitRotation = (vx >= 0 ? 1 : -1) * easeOutCubic * 35;
+            const exitOpacity = 1 - easeOutCubic * 0.15;
+            const shadowBlur = 4 + easeOutCubic * 12;
+            const shadowY = 2 + easeOutCubic * 8;
+            const order = f.eliminatedOrder ?? 0;
+            return (
+              <motion.div
+                key={`exiting-${f.id}-${order}`}
+                className="absolute flex items-center justify-center rounded-lg pointer-events-none overflow-visible"
+                style={{
+                  width: flagSize,
+                  height: flagSize,
+                  left: currentExitX,
+                  top: currentExitY,
+                  zIndex: 40 + order,
+                  transform: `translate(-50%, -50%) rotate(${exitRotation}deg) scale(${exitScale})`,
+                  transformOrigin: "center center",
+                  opacity: exitOpacity,
+                  filter: `drop-shadow(0 ${shadowY}px ${shadowBlur}px rgba(0,0,0,0.25)) drop-shadow(0 2px 4px rgba(0,0,0,0.15))`,
+                  transition: "filter 0.08s ease-out",
+                }}
+                initial={false}
+              >
+                {f.country.flag}
+              </motion.div>
+            );
+          })}
+
+        {/* Falling & stacked flags: tumble with velocity-based shadow, layered stack */}
+        {/* {flags
+          .filter((f): f is typeof f & { fallY: number; fallOpacity: number } =>
+            Boolean(f.falling && f.fallY != null && f.fallOpacity != null)
+          )
+          .map((f) => {
+            const container = containerRef.current;
+            const containerWidth = container?.offsetWidth ?? 0;
+            const containerRect = container?.getBoundingClientRect() ?? null;
+            const fallingFlagSize = Math.floor(flagSize * 0.6);
+            const fallingEmojiSize = Math.max(10, Math.floor(fallingFlagSize * 0.6));
+            let fallX =
+              f.fallX ??
+              (containerRect ? containerRect.left : 0) + containerWidth * (cx + (f.x ?? 0) * scale);
+            const screenWidth = typeof window !== "undefined" ? window.innerWidth : containerWidth;
+            const padding = fallingFlagSize / 2;
+            fallX = Math.max(padding, Math.min(screenWidth - padding, fallX));
+            const stackDelay = f.eliminatedOrder != null ? (f.eliminatedOrder - 1) * 0.1 : 0;
+            const fallScale = f.stacked ? 1 : Math.max(0.82, 1 - (f.fallVelocity ?? 0) * 0.12);
+            const rotation = f.stacked ? 0 : (f.fallRotation ?? 0);
+            const driftX = f.stacked ? 0 : (f.fallDriftX ?? 0) * 20;
+            const adjustedFallX = fallX + driftX;
+            const velocity = f.fallVelocity ?? 0;
+            const shadowOffset = f.stacked ? 2 : Math.min(4 + velocity * 3, 12);
+            const shadowBlur = f.stacked ? 4 : Math.min(6 + velocity * 4, 16);
+            const order = f.eliminatedOrder ?? 0;
+            return (
+              <motion.div
+                key={`falling-${f.id}-${order}`}
+                className="absolute flex items-center justify-center rounded-lg pointer-events-none overflow-visible"
+                style={{
+                  width: fallingFlagSize,
+                  height: fallingFlagSize,
+                  fontSize: fallingEmojiSize,
+                  left: adjustedFallX,
+                  top: f.fallY,
+                  zIndex: 30 + order,
+                  opacity: f.fallOpacity,
+                  transform: `translate(-50%, -50%) rotate(${rotation}deg) scale(${fallScale})`,
+                  transformOrigin: "center center",
+                  filter: `drop-shadow(0 ${shadowOffset}px ${shadowBlur}px rgba(0,0,0,0.2)) drop-shadow(0 1px 3px rgba(0,0,0,0.12))`,
+                  transition: f.stacked
+                    ? "left 0.35s cubic-bezier(0.34, 1.2, 0.64, 1), top 0.35s cubic-bezier(0.34, 1.2, 0.64, 1), transform 0.35s cubic-bezier(0.34, 1.2, 0.64, 1), filter 0.25s ease-out"
+                    : "transform 0.06s linear, opacity 0.08s ease-out, filter 0.1s ease-out",
+                  willChange: f.stacked ? "transform, left, top, filter" : "transform, opacity, filter",
+                }}
+                initial={false}
+                animate={
+                  f.stacked
+                    ? {
+                        y: [0, -5, 0],
+                        scale: [1, 1.04, 1],
+                      }
+                    : {}
+                }
+                transition={
+                  f.stacked
+                    ? {
+                        duration: 0.9,
+                        delay: stackDelay * 0.4,
+                        repeat: Infinity,
+                        repeatDelay: 0.2,
+                        ease: "easeInOut",
+                      }
+                    : {}
+                }
+              >
+                {f.country.flag}
+              </motion.div>
+            );
+          })} */}
       </div>
 
       {/* Toast Container */}
