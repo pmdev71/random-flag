@@ -20,7 +20,7 @@ import { useTheme } from "@/app/providers/theme-provider";
 
 const DEFAULT_GAP_ANGLE = 35; // Default gap size in degrees
 const LOGICAL_R = 1;
-const BASE_FLAG_SIZE = 50;
+const BASE_FLAG_SIZE = 55;
 const BASE_SPEED = 0.00015; // 50% of 0.00035 for slower bouncing
 const MIN_BOUNCE_SPEED = 0.15; // Keep bouncing speed from slowing down (50% of previous)
 
@@ -116,6 +116,7 @@ export default function Home() {
   const rafRef = useRef<number>(0);
   const lastTimeRef = useRef<number>(0);
   const gapRotationRef = useRef(0);
+  const gameOverTriggeredRef = useRef(false); // Stop loop immediately when round ends so congratulations can paint
   const eliminatedSetRef = useRef<Set<string>>(new Set());
   const gapRotationDirectionRef = useRef(1); // 1 for clockwise, -1 for counter-clockwise
   const gapDynamicSpeedRef = useRef(1); // Dynamic speed multiplier
@@ -178,6 +179,7 @@ export default function Home() {
     setEliminatedList([]);
     setWinner(null);
     setGapRotation(randomStartAngle);
+    gameOverTriggeredRef.current = false;
     setGameState("playing");
     setSettingsModalOpen(false);
   }, [flagCount]);
@@ -202,6 +204,12 @@ export default function Home() {
     let nextDirectionChangeTime = lastTime + 2000 + Math.random() * 3000; // First change after 2-5 seconds
 
     const loop = (time: number) => {
+      // Stop immediately when round ended so React can paint congratulations (avoids hanging screen)
+      if (gameOverTriggeredRef.current) {
+        rafRef.current = 0;
+        return;
+      }
+
       // Use full delta so simulation speed stays constant even when FPS drops (e.g. many flags)
       const rawDt = (time - lastTime) * speedMult;
       const dt = Math.min(rawDt, 100);
@@ -880,13 +888,19 @@ export default function Home() {
         
         // Game over when 2nd-to-last flag is eliminated (when going from 2 to 1)
         if (active.length === 1 && prevActiveCount === 2) {
+          gameOverTriggeredRef.current = true;
           setWinner(active[0].country);
           setGameState("finished");
           return recalculatedFlags;
         }
         
-        // Also handle edge case when game ends with 0 flags
+        // Also handle edge case when game ends with 0 flags (e.g. last two exit same frame)
         if (active.length === 0 && prevActiveCount > 0) {
+          gameOverTriggeredRef.current = true;
+          const lastEliminated = [...recalculatedFlags]
+            .filter((f) => f.eliminated && f.eliminatedOrder != null)
+            .sort((a, b) => (b.eliminatedOrder ?? 0) - (a.eliminatedOrder ?? 0))[0];
+          if (lastEliminated) setWinner(lastEliminated.country);
           setGameState("finished");
           return recalculatedFlags;
         }
@@ -1036,9 +1050,9 @@ export default function Home() {
           )}
         </div>
         <div className="flex justify-center pointer-events-none">
-          <span className="inline-flex items-center px-4 py-1.5 rounded-full bg-amber-100 dark:bg-amber-900/40 text-amber-800 dark:text-amber-200 font-semibold text-base shadow-sm border border-amber-200/60 dark:border-amber-700/50">
+          {/* <span className="inline-flex items-center px-4 py-1.5 rounded-full bg-amber-100 dark:bg-amber-900/40 text-amber-800 dark:text-amber-200 font-semibold text-base shadow-sm border border-amber-200/60 dark:border-amber-700/50">
             Round {totalRounds}
-          </span>
+          </span> */}
         </div>
         <div className="flex justify-end items-center gap-2">
           <button
@@ -1237,7 +1251,7 @@ export default function Home() {
                       className="flex items-center justify-between gap-1.5 rounded-md bg-white/90 dark:bg-gray-800/90 px-1.5 py-0.5 text-xs border border-amber-100 dark:border-amber-800/50"
                     >
                       <span className="flex items-center gap-1.5 min-w-0">
-                        <span>{i + 1}.</span>
+                        <span className="font-bold text-gray-700 dark:text-gray-300 truncate max-w-[70px] sm:max-w-[90px]">{i + 1}.</span>
                         <span>{country.flag}</span>
                         <span className="text-gray-700 dark:text-gray-300 font-medium truncate max-w-[70px] sm:max-w-[90px]">
                           {country.name}
@@ -1261,6 +1275,24 @@ export default function Home() {
             ref={containerRef}
             className="relative w-full h-full max-w-[min(100vw,100vh)] max-h-[min(100vw,100vh)] aspect-square rounded-3xl border-0 bg-gray-50/50 dark:bg-gray-800/50 overflow-hidden"
           >
+            {/* Remaining flag count - top left of circle */}
+            {gameState === "playing" && (
+              <div className="absolute top-2 left-5 sm:top-3 sm:left-3 z-20 flex items-center gap-1.5 rounded-lg bg-blue-500/90 dark:bg-blue-600/90 px-2.5 py-1.5 sm:px-3 sm:py-2 shadow-md border border-blue-400/50 dark:border-blue-500/50">
+                <span className="text-xs sm:text-sm font-bold text-white tabular-nums">
+                  Remain: {flags.filter((f) => !f.eliminated && !f.falling && !f.exiting).length}
+                </span>
+                <span className="text-xs sm:text-sm text-blue-100 font-medium hidden sm:inline">
+                  left
+                </span>
+              </div>
+            )}
+            {gameState === "playing" && (
+              <div className="absolute top-2 right-5 sm:top-3 sm:right-3 z-20 flex items-center gap-1.5 rounded-lg bg-amber-500/90 dark:bg-amber-600/90 px-2.5 py-1.5 sm:px-3 sm:py-2 shadow-md border border-amber-400/50 dark:border-amber-500/50">
+                <span className="text-xs sm:text-sm font-bold text-white tabular-nums">
+                  Round: {totalRounds}
+                </span>
+              </div>
+            )}
             {/* Bouncing area marker - shows where flags bounce (static, doesn't rotate) */}
             <svg
               className="absolute inset-0 w-full h-full pointer-events-none"
@@ -1316,7 +1348,7 @@ export default function Home() {
               />
             </svg>
             {flags
-              .filter((f) => !f.eliminated && !f.falling && !f.exiting)
+              .filter((f) => !f.eliminated && !f.falling && !f.exiting && gameState !== "finished")
               .map((f) => (
                 <motion.div
                   key={f.id}
@@ -1382,22 +1414,38 @@ export default function Home() {
                   <div className="absolute inset-0 bg-gradient-radial from-yellow-400/40 via-amber-300/20 to-transparent rounded-full" />
                 </motion.div>
 
-                {/* Sparkles around center */}
-                {[...Array(12)].map((_, i) => {
-                  const angle = (i / 12) * 360;
-                  const r = 22 + (i % 2) * 5;
+                {/* Sparkles around center - two rings, varied size & timing */}
+                {[...Array(20)].map((_, i) => {
+                  const angle = (i / 20) * 360;
+                  const isOuter = i % 2 === 0;
+                  const r = isOuter ? 28 : 18;
                   const x = Math.cos((angle * Math.PI) / 180) * r;
                   const y = Math.sin((angle * Math.PI) / 180) * r;
+                  const duration = 1.2 + (i % 3) * 0.4;
+                  const delay = (i * 0.08) % 1.2;
+                  const scalePeak = 0.9 + (i % 3) * 0.2;
                   return (
                     <motion.div
                       key={i}
                       className="absolute -translate-x-1/2 -translate-y-1/2"
                       style={{ left: `calc(50% + ${x}%)`, top: `calc(50% + ${y}%)` }}
-                      initial={{ scale: 0, opacity: 0 }}
-                      animate={{ scale: [0, 1.2, 0.8], opacity: [0, 1, 0.7] }}
-                      transition={{ duration: 1.5, delay: i * 0.06, repeat: Infinity, repeatDelay: 0.3, ease: "easeInOut" }}
+                      initial={{ scale: 0, opacity: 0, rotate: 0 }}
+                      animate={{
+                        scale: [0, scalePeak, scalePeak * 0.7],
+                        opacity: [0, 1, 0.8],
+                        rotate: [0, 15, -10, 0],
+                      }}
+                      transition={{
+                        duration,
+                        delay,
+                        repeat: Infinity,
+                        repeatDelay: 0.2 + (i % 2) * 0.15,
+                        ease: "easeInOut",
+                      }}
                     >
-                      <Sparkles className="h-4 w-4 sm:h-5 sm:w-5 text-amber-400 drop-shadow" />
+                      <Sparkles
+                        className={`drop-shadow-md ${i % 3 === 0 ? "text-amber-300" : i % 3 === 1 ? "text-yellow-400" : "text-amber-400"} h-5 w-5 sm:h-6 sm:w-6 md:h-7 md:w-7`}
+                      />
                     </motion.div>
                   );
                 })}
@@ -1419,14 +1467,14 @@ export default function Home() {
                   <motion.span
                     animate={{ scale: [1, 1.08, 1], rotate: [0, 5, -5, 0] }}
                     transition={{ duration: 2, repeat: Infinity, ease: "easeInOut" }}
-                    className="text-3xl sm:text-4xl md:text-5xl drop-shadow-md inline-block"
+                    className="text-7xl sm:text-8xl md:text-9xl drop-shadow-md inline-block"
                   >
                     {winner.flag}
                   </motion.span>
-                  <span className="text-sm sm:text-base md:text-lg font-bold text-gray-900 dark:text-white">
+                  <span className="text-base sm:text-lg md:text-xl lg:text-2xl font-bold text-gray-900 dark:text-white">
                     {winner.name}
                   </span>
-                  <span className="text-xs sm:text-sm font-semibold text-amber-700 dark:text-amber-300">
+                  <span className="text-sm sm:text-base md:text-lg font-semibold text-amber-700 dark:text-amber-300">
                     🏆 Round Winner 🏆
                   </span>
                 </motion.div>
@@ -1437,7 +1485,7 @@ export default function Home() {
                     transition={{ delay: 0.4 }}
                     className="flex flex-col items-center mt-1 relative z-10"
                   >
-                    <p className="text-xs sm:text-sm text-gray-600 dark:text-gray-400">Next round in</p>
+                    <p className="text-xs sm:text-sm text-gray-600 dark:text-gray-400">Next Round In</p>
                     <p className="text-2xl sm:text-3xl font-bold text-amber-600 dark:text-amber-400 tabular-nums">
                       {nextRoundCountdown}
                     </p>
