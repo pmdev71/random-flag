@@ -94,8 +94,86 @@ function isInGap(angle: number, gapRotation: number, gapAngleDegrees: number): b
   return Math.abs(diff) <= gapAngle / 2;
 }
 
+// Custom bump sound: public/sounds/bump.wav
+const BUMP_SOUND_URL = "/sounds/bump.wav";
+
+// Bump sound: plays custom file if loaded, else Web Audio tone. Throttled by caller.
+function playBumpSound(
+  audioContextRef: { current: AudioContext | null },
+  lastPlayedRef: { current: number },
+  customBumpBufferRef: { current: AudioBuffer | null },
+  type: "wall" | "flag",
+  throttleMs: number = 45
+) {
+  if (typeof window === "undefined") return;
+  const now = performance.now();
+  if (now - lastPlayedRef.current < throttleMs) return;
+  lastPlayedRef.current = now;
+  try {
+    if (!audioContextRef.current) {
+      audioContextRef.current = new (window.AudioContext || (window as unknown as { webkitAudioContext: typeof AudioContext }).webkitAudioContext)();
+    }
+    const ctx = audioContextRef.current;
+
+    // Load custom sound on first use if not yet loaded (e.g. preload still in progress)
+    if (!customBumpBufferRef.current && BUMP_SOUND_URL) {
+      fetch(BUMP_SOUND_URL)
+        .then((r) => (r.ok ? r.arrayBuffer() : Promise.reject(new Error("404"))))
+        .then((ab) => ctx.decodeAudioData(ab))
+        .then((buf) => {
+          customBumpBufferRef.current = buf;
+        })
+        .catch(() => {});
+    }
+
+    const play = () => {
+      const gain = ctx.createGain();
+      gain.connect(ctx.destination);
+
+      if (customBumpBufferRef.current) {
+        const buffer = customBumpBufferRef.current;
+        const duration = buffer.duration;
+        // Hold full volume for the whole sound, then short fade at end so it plays fully
+        gain.gain.setValueAtTime(0.7, ctx.currentTime);
+        gain.gain.setValueAtTime(0.7, ctx.currentTime + Math.max(0, duration - 0.03));
+        gain.gain.exponentialRampToValueAtTime(0.001, ctx.currentTime + duration);
+        const source = ctx.createBufferSource();
+        source.buffer = buffer;
+        source.connect(gain);
+        source.start(0);
+        return;
+      }
+
+      gain.gain.setValueAtTime(0.6, ctx.currentTime);
+      gain.gain.exponentialRampToValueAtTime(0.001, ctx.currentTime + 0.15);
+
+      // Fallback: built-in tone
+      const osc = ctx.createOscillator();
+      osc.connect(gain);
+      osc.type = "sine";
+      osc.frequency.value = type === "wall" ? 90 : 180;
+      const duration = type === "wall" ? 0.04 : 0.025;
+      gain.gain.exponentialRampToValueAtTime(0.001, ctx.currentTime + duration);
+      osc.start(ctx.currentTime);
+      osc.stop(ctx.currentTime + duration);
+    };
+
+    // Unlock context on first interaction (required by browsers); then play
+    if (ctx.state === "suspended") {
+      ctx.resume().then(play).catch(() => {});
+    } else {
+      play();
+    }
+  } catch {
+    // Ignore audio errors (e.g. autoplay policy)
+  }
+}
+
 export default function Home() {
   const containerRef = useRef<HTMLDivElement>(null);
+  const audioContextRef = useRef<AudioContext | null>(null);
+  const lastBumpSoundRef = useRef(0);
+  const customBumpBufferRef = useRef<AudioBuffer | null>(null);
   const [gameState, setGameState] = useState<GameState>("idle");
   const [flags, setFlags] = useState<BouncingFlag[]>([]);
   const [winner, setWinner] = useState<Country | null>(null);
@@ -111,6 +189,13 @@ export default function Home() {
   const [loopEnabled, setLoopEnabled] = useState(true); // Auto-start next round
   const [winnerCounts, setWinnerCounts] = useState<Record<string, number>>({}); // country code -> win count (top 10 by wins)
   const [totalRounds, setTotalRounds] = useState(0); // total rounds played
+  const [sliderCountries, setSliderCountries] = useState<[Country, Country]>(() => {
+    const idx1 = Math.floor(Math.random() * countries.length);
+    let idx2 = Math.floor(Math.random() * countries.length);
+    while (idx2 === idx1) idx2 = Math.floor(Math.random() * countries.length);
+    return [countries[idx1], countries[idx2]];
+  });
+  const [sliderKey, setSliderKey] = useState(0);
   const eliminatedOrderRef = useRef(0);
   const flagIdRef = useRef(0);
   const rafRef = useRef<number>(0);
@@ -130,6 +215,23 @@ export default function Home() {
   const scale = 1; // Scale factor: logical coordinates map 1:1 to visual percentage (radius 0.42 = 42% visual)
 
   const startGame = useCallback(() => {
+    // Create AudioContext on user gesture (unlocks audio) and preload custom bump sound
+    if (typeof window !== "undefined" && BUMP_SOUND_URL) {
+      if (!audioContextRef.current) {
+        audioContextRef.current = new (window.AudioContext || (window as unknown as { webkitAudioContext: typeof AudioContext }).webkitAudioContext)();
+      }
+      if (!customBumpBufferRef.current) {
+        const ctx = audioContextRef.current;
+        fetch(BUMP_SOUND_URL)
+          .then((r) => (r.ok ? r.arrayBuffer() : Promise.reject(new Error("404"))))
+          .then((ab) => ctx.decodeAudioData(ab))
+          .then((buf) => {
+            customBumpBufferRef.current = buf;
+          })
+          .catch(() => {});
+      }
+    }
+
     // Calculate flag size based on flag count
     const currentFlagSize = getFlagSize(flagCount);
     
@@ -448,6 +550,7 @@ export default function Home() {
         // This ensures flag edge stays exactly at the visual circle boundary
         const maxFlagCenterDistance = Math.max(0.05, radius - flagRadiusLogical);
         
+        let wallBounceThisFrame = false;
         const next = updated.map((f) => {
           if (f.eliminated || f.falling) return f;
           
@@ -677,7 +780,7 @@ export default function Home() {
           // Use circular distance check - this ensures circular bouncing area
           if (dist > radius) {
             // Flag crossed radius but not in gap - bounce back
-            
+            wallBounceThisFrame = true;
             // Flag hit the circular wall (not in gap) - bounce back
             // Calculate normal vector pointing outward from circle center
             // Normalize the position vector to get the normal
@@ -715,6 +818,7 @@ export default function Home() {
             // If flag was moving outward, bounce it back (circular bounce)
             const dot = f.vx * nx + f.vy * ny;
             if (dot > 0) {
+              wallBounceThisFrame = true;
               // Reflect velocity off circular wall
               let vx = f.vx - 2 * dot * nx;
               let vy = f.vy - 2 * dot * ny;
@@ -726,8 +830,11 @@ export default function Home() {
           return { ...f, x, y };
         });
 
+        if (wallBounceThisFrame) playBumpSound(audioContextRef, lastBumpSoundRef, customBumpBufferRef, "wall");
+
         // Flag-to-flag collision detection and response
         // Check each flag against all other flags for collisions
+        let flagCollisionThisFrame = false;
         const finalFlags = next.map((f, i) => {
           // Skip eliminated or falling flags
           if (f.eliminated || f.falling) return f;
@@ -756,6 +863,7 @@ export default function Home() {
             if (distance < minDistance && distance > 0.001) {
               // Collision detected - calculate collision response
               collided = true;
+              flagCollisionThisFrame = true;
               
               // Normalize collision vector
               const nx = dx / distance;
@@ -795,6 +903,8 @@ export default function Home() {
           
           return f;
         });
+
+        if (flagCollisionThisFrame) playBumpSound(audioContextRef, lastBumpSoundRef, customBumpBufferRef, "flag");
 
         // Keep bouncing speed from slowing down: enforce minimum velocity (no long-term drift)
         const finalFlagsWithMinSpeed = finalFlags.map((f) => {
@@ -1016,6 +1126,18 @@ export default function Home() {
     return () => clearTimeout(timer);
   }, [nextRoundCountdown, startGame]);
 
+  // Slider: pick 2 random countries every 2s (left-to-right slide)
+  useEffect(() => {
+    const id = setInterval(() => {
+      const idx1 = Math.floor(Math.random() * countries.length);
+      let idx2 = Math.floor(Math.random() * countries.length);
+      while (idx2 === idx1) idx2 = Math.floor(Math.random() * countries.length);
+      setSliderCountries([countries[idx1], countries[idx2]]);
+      setSliderKey((k) => k + 1);
+    }, 2000);
+    return () => clearInterval(id);
+  }, []);
+
   return (
     <div className="fixed inset-0 w-full h-full overflow-hidden bg-gray-50 transition-colors dark:bg-gray-950">
       {/* Top bar: Play left, Total rounds center, Settings right */}
@@ -1231,24 +1353,24 @@ export default function Home() {
         </div>
       </Modal>
 
-      {/* Game arena - starts right after Round count bar */}
-      <div className="absolute top-[-80px] left-0 right-0 bottom-0 flex flex-col items-center justify-center w-full h-full overflow-hidden">
-
-           {loopEnabled && Object.keys(winnerCounts).length > 0 && (() => {
+      {/* Game arena: top-to-bottom sections — safe area, Top 9 (optional), Slider, Game circle, bottom bar reserved */}
+      <div className="absolute inset-0 flex flex-col items-center overflow-hidden pt-4 pb-20">
+        {/* Section 1: Top 9 (when loop + winner counts) — in flow, flex-shrink-0 */}
+        {loopEnabled && Object.keys(winnerCounts).length > 0 && (() => {
           const sorted = Object.entries(winnerCounts).sort(([, a], [, b]) => b - a);
           const top9Slice = sorted.slice(0, 9);
           const top9 = top9Slice
             .map(([code, wins]) => ({ country: countries.find((c) => c.code === code), wins }))
             .filter((entry): entry is { country: Country; wins: number } => entry.country != null);
           return (
-            <div className="fixed top-4 left-0 right-0 z-30 px-1 md:relative md:bottom-auto md:left-auto md:right-auto md:z-auto md:mt-2 md:pb-0 w-full max-w-[min(100vw,100vh)] flex-shrink-0 pointer-events-none">
-              <div className="dark:bg-amber-950/80 px-3 py-2 mx-auto max-w-[min(100vw,100vh)] pointer-events-auto">
+            <div className="w-full max-w-[min(100vw,100vh)] flex-shrink-0 px-2 pt-0 pb-0 pointer-events-none">
+              <div className="dark:bg-amber-950/80 px-2 py-1 mx-auto max-w-[min(100vw,100vh)] pointer-events-auto rounded-lg">
                 {/* Top 9 in 3 columns: col1 = 1,2,3 | col2 = 4,5,6 | col3 = 7,8,9 */}
-                <div className="grid grid-cols-3 grid-rows-3 grid-flow-col gap-x-2 gap-y-0.5">
+                <div className="grid grid-cols-3 grid-rows-3 grid-flow-col gap-x-1.5 gap-y-0">
                   {top9.map(({ country, wins }, i) => (
                     <div
                       key={`${country.code}-${i}`}
-                      className="flex items-center justify-between gap-1.5 rounded-md bg-white/90 dark:bg-gray-800/90 px-1.5 py-0.5 text-xs border border-amber-100 dark:border-amber-800/50"
+                      className="flex items-center justify-between gap-1.5 rounded-md bg-white/90 dark:bg-gray-800/90 px-1.5 py-0 text-xs border border-amber-100 dark:border-amber-800/50"
                     >
                       <span className="flex items-center gap-1.5 min-w-0">
                         <span className="font-bold text-gray-700 dark:text-gray-300 truncate max-w-[70px] sm:max-w-[90px]">{i + 1}.</span>
@@ -1268,12 +1390,46 @@ export default function Home() {
           );
         })()}
 
+        {/* Section 2: Slider — in flow, flex-shrink-0 */}
+        <div className="w-full max-w-[min(100vw,100vh)] flex-shrink-0 px-2 mt-1.5 mx-auto">
+          <div className="overflow-hidden rounded-lg border border-amber-200/60 dark:border-amber-700/50 bg-white/90 dark:bg-amber-950/60 mx-auto">
+            <div className="relative flex items-center justify-center gap-2 px-2 py-1 min-h-0">
+              <AnimatePresence mode="wait" initial={false}>
+                <motion.div
+                  key={sliderKey}
+                  initial={{ x: "100%", opacity: 0 }}
+                  animate={{ x: 0, opacity: 1 }}
+                  exit={{ x: "-100%", opacity: 0 }}
+                  transition={{
+                    type: "spring",
+                    stiffness: 400,
+                    damping: 35,
+                    mass: 0.8,
+                  }}
+                  className="flex items-center justify-center gap-3 sm:gap-4 w-full"
+                >
+                  {sliderCountries.map((country, i) => (
+                    <div
+                      key={`${country.code}-${sliderKey}-${i}`}
+                      className="flex items-center gap-1.5 rounded-md bg-amber-50/90 dark:bg-amber-900/20 px-2 py-1 text-xs border border-amber-200/60 dark:border-amber-700/40 shrink-0"
+                    >
+                      <span className="text-base">{country.flag}</span>
+                      <span className="font-medium text-gray-800 dark:text-gray-200 truncate max-w-[100px] sm:max-w-[140px]">
+                        {country.name}
+                      </span>
+                    </div>
+                  ))}
+                </motion.div>
+              </AnimatePresence>
+            </div>
+          </div>
+        </div>
 
-
-        <div className="relative w-full h-full max-w-full max-h-full overflow-hidden flex items-center justify-center">
+        {/* Section 3: Game circle — takes remaining space (flex-1 min-h-0), aligned to top (no gap below slider) */}
+        <div className="flex-1 min-h-0 w-full flex items-start justify-center overflow-hidden px-1">
           <div
             ref={containerRef}
-            className="relative w-full h-full max-w-[min(100vw,100vh)] max-h-[min(100vw,100vh)] aspect-square rounded-3xl border-0 bg-gray-50/50 dark:bg-gray-800/50 overflow-hidden"
+            className="relative w-full h-full max-w-[min(100vw,100vh)] max-h-[min(100vw,100vh)] aspect-square rounded-3xl border-0 bg-gray-50/50 dark:bg-gray-800/50 overflow-hidden shrink-0"
           >
             {/* Remaining flag count - top left of circle */}
             {gameState === "playing" && (
@@ -1467,7 +1623,7 @@ export default function Home() {
                   <motion.span
                     animate={{ scale: [1, 1.08, 1], rotate: [0, 5, -5, 0] }}
                     transition={{ duration: 2, repeat: Infinity, ease: "easeInOut" }}
-                    className="text-7xl sm:text-8xl md:text-9xl drop-shadow-md inline-block"
+                    className="text-8xl sm:text-9xl md:text-[10rem] lg:text-[12rem] drop-shadow-md inline-block"
                   >
                     {winner.flag}
                   </motion.span>
