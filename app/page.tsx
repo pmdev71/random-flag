@@ -1186,7 +1186,7 @@ export default function Home() {
     return () => clearTimeout(timer);
   }, [nextRoundCountdown, startGame]);
 
-  // Text-to-speech: "Congratulate [Country Name]" when a country wins
+  // Text-to-speech: "Congratulate [Country Name]" when a country wins — use female voice
   useEffect(() => {
     if (gameState !== "finished" || !winner || lastSpokenWinnerRef.current === winner.code) return;
     lastSpokenWinnerRef.current = winner.code;
@@ -1195,8 +1195,23 @@ export default function Home() {
     const utterance = new SpeechSynthesisUtterance(text);
     utterance.rate = 0.9;
     utterance.pitch = 1;
+    const voices = window.speechSynthesis.getVoices();
+    const femaleVoice =
+      voices.find((v) => v.name.toLowerCase().includes("female")) ??
+      voices.find((v) => /samantha|victoria|karen|moira|fiona|alice|emily|zira/i.test(v.name)) ??
+      voices.find((v) => v.lang.startsWith("en"));
+    if (femaleVoice) utterance.voice = femaleVoice;
     window.speechSynthesis.speak(utterance);
   }, [gameState, winner]);
+
+  // Ensure voices are loaded (Chrome loads them asynchronously)
+  useEffect(() => {
+    if (typeof window === "undefined" || !window.speechSynthesis) return;
+    window.speechSynthesis.getVoices();
+    const onVoicesChanged = () => window.speechSynthesis.getVoices();
+    window.speechSynthesis.addEventListener("voiceschanged", onVoicesChanged);
+    return () => window.speechSynthesis.removeEventListener("voiceschanged", onVoicesChanged);
+  }, []);
 
   // Typing section: new random country every 2s
   useEffect(() => {
