@@ -240,13 +240,10 @@ export default function Home() {
   const [loopEnabled, setLoopEnabled] = useState(true); // Auto-start next round
   const [winnerCounts, setWinnerCounts] = useState<Record<string, number>>({}); // country code -> win count (top 10 by wins)
   const [totalRounds, setTotalRounds] = useState(0); // total rounds played
-  const [sliderCountries, setSliderCountries] = useState<[Country, Country]>(() => {
-    const idx1 = Math.floor(Math.random() * countries.length);
-    let idx2 = Math.floor(Math.random() * countries.length);
-    while (idx2 === idx1) idx2 = Math.floor(Math.random() * countries.length);
-    return [countries[idx1], countries[idx2]];
-  });
-  const [sliderKey, setSliderKey] = useState(0);
+  const [typingCountry, setTypingCountry] = useState<Country | null>(() =>
+    countries[Math.floor(Math.random() * countries.length)]
+  );
+  const [typingLength, setTypingLength] = useState(0);
   const eliminatedOrderRef = useRef(0);
   const flagIdRef = useRef(0);
   const rafRef = useRef<number>(0);
@@ -1201,17 +1198,28 @@ export default function Home() {
     window.speechSynthesis.speak(utterance);
   }, [gameState, winner]);
 
-  // Slider: pick 2 random countries every 2s (left-to-right slide)
+  // Typing section: new random country every 2s
   useEffect(() => {
     const id = setInterval(() => {
-      const idx1 = Math.floor(Math.random() * countries.length);
-      let idx2 = Math.floor(Math.random() * countries.length);
-      while (idx2 === idx1) idx2 = Math.floor(Math.random() * countries.length);
-      setSliderCountries([countries[idx1], countries[idx2]]);
-      setSliderKey((k) => k + 1);
+      const idx = Math.floor(Math.random() * countries.length);
+      setTypingCountry(countries[idx]);
     }, 2000);
     return () => clearInterval(id);
   }, []);
+
+  // Typing animation: type out country name character by character
+  useEffect(() => {
+    if (!typingCountry) return;
+    setTypingLength(0);
+    const name = typingCountry.name;
+    let len = 0;
+    const id = setInterval(() => {
+      len += 1;
+      setTypingLength(len);
+      if (len >= name.length) clearInterval(id);
+    }, 140);
+    return () => clearInterval(id);
+  }, [typingCountry]);
 
   return (
     <div className="fixed inset-0 w-full h-full overflow-hidden bg-gray-50 transition-colors dark:bg-gray-950">
@@ -1465,36 +1473,34 @@ export default function Home() {
           );
         })()}
 
-        {/* Section 2: Slider — in flow, flex-shrink-0 */}
-        <div className="w-full max-w-[min(100vw,100vh)] flex-shrink-0 px-2 mt-1.5 mx-auto">
-          <div className="overflow-hidden rounded-lg border border-amber-200/60 dark:border-amber-700/50 bg-white/90 dark:bg-amber-950/60 mx-auto">
-            <div className="relative flex items-center justify-center gap-2 px-2 py-1 min-h-0">
-              <AnimatePresence mode="wait" initial={false}>
-                <motion.div
-                  key={sliderKey}
-                  initial={{ x: "100%", opacity: 0 }}
-                  animate={{ x: 0, opacity: 1 }}
-                  exit={{ x: "-100%", opacity: 0 }}
-                  transition={{
-                    type: "spring",
-                    stiffness: 400,
-                    damping: 35,
-                    mass: 0.8,
-                  }}
-                  className="flex items-center justify-center gap-3 sm:gap-4 w-full"
-                >
-                  {sliderCountries.map((country, i) => (
-                    <div
-                      key={`${country.code}-${sliderKey}-${i}`}
-                      className="flex items-center gap-1.5 rounded-md bg-amber-50/90 dark:bg-amber-900/20 px-2 py-1 text-xs border border-amber-200/60 dark:border-amber-700/40 shrink-0"
+        {/* Section 2: Typing animation — one country at a time, name types out then next */}
+        <div className="w-full max-w-[min(100vw,100vh)] flex-shrink-0 px-2 mx-auto">
+          <div className="overflow-hidden bg-transparent dark:bg-transparent mx-auto">
+            <div className="relative flex items-center justify-center gap-2 px-3 py-1 min-h-0">
+              <AnimatePresence mode="wait">
+                {typingCountry && (
+                  <motion.div
+                    key={typingCountry.code}
+                    initial={{ opacity: 0 }}
+                    animate={{ opacity: 1 }}
+                    exit={{ opacity: 0 }}
+                    transition={{ duration: 0.2 }}
+                    className="flex items-center gap-2 rounded-md bg-transparent dark:bg-transparent px-2.5 py-1.5 text-md"
+                  >
+                  <span className="text-lg">{typingCountry.flag}</span>
+                  <span className="font-medium text-gray-800 dark:text-gray-200 min-w-[1ch]">
+                    {typingCountry.name.slice(0, typingLength)}
+                    <motion.span
+                      animate={{ opacity: [1, 0] }}
+                      transition={{ duration: 0.5, repeat: Infinity }}
+                      className="inline-block text-amber-600 dark:text-amber-400"
+                      aria-hidden
                     >
-                      <span className="text-base">{country.flag}</span>
-                      <span className="font-medium text-gray-800 dark:text-gray-200 truncate max-w-[100px] sm:max-w-[140px]">
-                        {country.name}
-                      </span>
-                    </div>
-                  ))}
+                      |
+                    </motion.span>
+                  </span>
                 </motion.div>
+                )}
               </AnimatePresence>
             </div>
           </div>
