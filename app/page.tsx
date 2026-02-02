@@ -240,6 +240,12 @@ export default function Home() {
   const [loopEnabled, setLoopEnabled] = useState(true); // Auto-start next round
   const [winnerCounts, setWinnerCounts] = useState<Record<string, number>>({}); // country code -> win count (top 10 by wins)
   const [totalRounds, setTotalRounds] = useState(0); // total rounds played
+  const [customBackgroundColor, setCustomBackgroundColor] = useState<string | null>(() => {
+    if (typeof window !== "undefined") {
+      return localStorage.getItem("customBackgroundColor");
+    }
+    return null;
+  });
   const [typingCountry, setTypingCountry] = useState<Country | null>(() =>
     countries[Math.floor(Math.random() * countries.length)]
   );
@@ -256,6 +262,17 @@ export default function Home() {
   const lastDirectionChangeRef = useRef(0); // Track when direction/speed last changed
   const toast = useToast();
   const { theme, toggleTheme } = useTheme();
+
+  // Save custom background color to localStorage
+  useEffect(() => {
+    if (typeof window !== "undefined") {
+      if (customBackgroundColor) {
+        localStorage.setItem("customBackgroundColor", customBackgroundColor);
+      } else {
+        localStorage.removeItem("customBackgroundColor");
+      }
+    }
+  }, [customBackgroundColor]);
 
   const cx = 0.5;
   const cy = 0.5;
@@ -1111,8 +1128,14 @@ export default function Home() {
     return () => clearInterval(id);
   }, [typingCountry]);
 
+  // Determine background color: custom color takes precedence, then theme-based default
+  const backgroundColor = customBackgroundColor || (theme === "dark" ? "#030712" : "#f9fafb");
+
   return (
-    <div className="fixed inset-0 w-full h-full overflow-hidden bg-gray-50 transition-colors dark:bg-gray-950">
+    <div 
+      className="fixed inset-0 w-full h-full overflow-hidden transition-colors"
+      style={{ backgroundColor }}
+    >
       {/* Top bar: Play left, Total rounds center, Settings right */}
       <div className="fixed bottom-0 left-0 right-0 z-50 grid grid-cols-3 items-center p-4">
         <div className="flex justify-start">
@@ -1158,7 +1181,7 @@ export default function Home() {
             {theme === "light" ? <Moon className="h-5 w-5" /> : <Sun className="h-5 w-5" />}
           </button>
           <button
-            // onClick={() => setSettingsModalOpen(true)}
+            onClick={() => setSettingsModalOpen(true)}
             className="rounded-lg p-2 bg-white/90 dark:bg-gray-800/90 shadow border border-gray-200 dark:border-gray-700 text-gray-500 transition-colors hover:bg-gray-100 hover:text-gray-900 dark:text-gray-400 dark:hover:bg-gray-700 dark:hover:text-white"
             aria-label="Open settings"
           >
@@ -1175,7 +1198,7 @@ export default function Home() {
         size="md"
       >
         <div className="space-y-6">
-          <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
+          {/* <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
             <span className="text-sm font-medium text-gray-700 dark:text-gray-300">
               Number of flags
             </span>
@@ -1322,6 +1345,27 @@ export default function Home() {
                 }`}
               />
             </button>
+          </div> */}
+          <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
+            <span className="text-sm font-medium text-gray-700 dark:text-gray-300">
+              Background Color
+            </span>
+            <div className="flex items-center gap-3">
+              <input
+                type="color"
+                value={customBackgroundColor || (theme === "dark" ? "#030712" : "#f9fafb")}
+                onChange={(e) => setCustomBackgroundColor(e.target.value)}
+                className="w-16 h-10 rounded-lg border border-gray-300 dark:border-gray-600 cursor-pointer bg-white dark:bg-gray-800"
+                aria-label="Background color picker"
+              />
+              <button
+                onClick={() => setCustomBackgroundColor(null)}
+                className="rounded-lg px-3 py-1.5 text-sm font-medium transition-colors bg-gray-100 text-gray-700 hover:bg-gray-200 dark:bg-gray-800 dark:text-gray-300 dark:hover:bg-gray-700"
+                aria-label="Reset to default background color"
+              >
+                Reset
+              </button>
+            </div>
           </div>
         </div>
       </Modal>
