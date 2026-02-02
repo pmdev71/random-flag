@@ -96,6 +96,53 @@ function isInGap(angle: number, gapRotation: number, gapAngleDegrees: number): b
 
 // Custom bump sound: public/sounds/bump.wav
 const BUMP_SOUND_URL = "/sounds/bump.wav";
+const START_SOUND_URL = "/sounds/start.wav";
+const REMAIN20_SOUND_URL = "/sounds/remain20.wav";
+const REMAIN5_SOUND_URL = "/sounds/remain5.wav";
+
+// Play a one-shot sound from URL (loads and caches in bufferRef, plays when decoded)
+function playOneShotSound(
+  audioContextRef: { current: AudioContext | null },
+  bufferRef: { current: AudioBuffer | null },
+  url: string
+) {
+  if (typeof window === "undefined" || !url) return;
+  try {
+    if (!audioContextRef.current) {
+      audioContextRef.current = new (window.AudioContext || (window as unknown as { webkitAudioContext: typeof AudioContext }).webkitAudioContext)();
+    }
+    const ctx = audioContextRef.current;
+    const play = (buf: AudioBuffer) => {
+      const gain = ctx.createGain();
+      gain.connect(ctx.destination);
+      gain.gain.setValueAtTime(0.7, ctx.currentTime);
+      gain.gain.setValueAtTime(0.7, ctx.currentTime + Math.max(0, buf.duration - 0.03));
+      gain.gain.exponentialRampToValueAtTime(0.001, ctx.currentTime + buf.duration);
+      const source = ctx.createBufferSource();
+      source.buffer = buf;
+      source.connect(gain);
+      source.start(0);
+    };
+    const doPlay = (buf: AudioBuffer) => {
+      if (ctx.state === "suspended") ctx.resume().then(() => play(buf)).catch(() => {});
+      else play(buf);
+    };
+    if (bufferRef.current) {
+      doPlay(bufferRef.current);
+      return;
+    }
+    fetch(url)
+      .then((r) => (r.ok ? r.arrayBuffer() : Promise.reject(new Error("404"))))
+      .then((ab) => ctx.decodeAudioData(ab))
+      .then((buf) => {
+        bufferRef.current = buf;
+        doPlay(buf);
+      })
+      .catch(() => {});
+  } catch {
+    // Ignore audio errors
+  }
+}
 
 // Bump sound: plays custom file if loaded, else Web Audio tone. Throttled by caller.
 function playBumpSound(
@@ -174,6 +221,10 @@ export default function Home() {
   const audioContextRef = useRef<AudioContext | null>(null);
   const lastBumpSoundRef = useRef(0);
   const customBumpBufferRef = useRef<AudioBuffer | null>(null);
+  const startBufferRef = useRef<AudioBuffer | null>(null);
+  const remain20BufferRef = useRef<AudioBuffer | null>(null);
+  const remain5BufferRef = useRef<AudioBuffer | null>(null);
+  const lastSpokenWinnerRef = useRef<string | null>(null);
   const [gameState, setGameState] = useState<GameState>("idle");
   const [flags, setFlags] = useState<BouncingFlag[]>([]);
   const [winner, setWinner] = useState<Country | null>(null);
@@ -215,21 +266,25 @@ export default function Home() {
   const scale = 1; // Scale factor: logical coordinates map 1:1 to visual percentage (radius 0.42 = 42% visual)
 
   const startGame = useCallback(() => {
-    // Create AudioContext on user gesture (unlocks audio) and preload custom bump sound
-    if (typeof window !== "undefined" && BUMP_SOUND_URL) {
+    // Create AudioContext on user gesture (unlocks audio) and preload sounds
+    if (typeof window !== "undefined") {
       if (!audioContextRef.current) {
         audioContextRef.current = new (window.AudioContext || (window as unknown as { webkitAudioContext: typeof AudioContext }).webkitAudioContext)();
       }
-      if (!customBumpBufferRef.current) {
-        const ctx = audioContextRef.current;
-        fetch(BUMP_SOUND_URL)
-          .then((r) => (r.ok ? r.arrayBuffer() : Promise.reject(new Error("404"))))
-          .then((ab) => ctx.decodeAudioData(ab))
-          .then((buf) => {
-            customBumpBufferRef.current = buf;
-          })
-          .catch(() => {});
-      }
+      const ctx = audioContextRef.current;
+      const preload = (url: string, ref: { current: AudioBuffer | null }) => {
+        if (url && !ref.current) {
+          fetch(url)
+            .then((r) => (r.ok ? r.arrayBuffer() : Promise.reject(new Error("404"))))
+            .then((ab) => ctx.decodeAudioData(ab))
+            .then((buf) => { ref.current = buf; })
+            .catch(() => {});
+        }
+      };
+      preload(BUMP_SOUND_URL, customBumpBufferRef);
+      preload(START_SOUND_URL, startBufferRef);
+      preload(REMAIN20_SOUND_URL, remain20BufferRef);
+      preload(REMAIN5_SOUND_URL, remain5BufferRef);
     }
 
     // Calculate flag size based on flag count
@@ -280,10 +335,13 @@ export default function Home() {
     setFlags(initial);
     setEliminatedList([]);
     setWinner(null);
+    lastSpokenWinnerRef.current = null;
     setGapRotation(randomStartAngle);
     gameOverTriggeredRef.current = false;
     setGameState("playing");
     setSettingsModalOpen(false);
+    // Play start round sound
+    playOneShotSound(audioContextRef, startBufferRef, START_SOUND_URL);
   }, [flagCount]);
 
   const resetGame = useCallback(() => {
@@ -834,7 +892,6 @@ export default function Home() {
 
         // Flag-to-flag collision detection and response
         // Check each flag against all other flags for collisions
-        let flagCollisionThisFrame = false;
         const finalFlags = next.map((f, i) => {
           // Skip eliminated or falling flags
           if (f.eliminated || f.falling) return f;
@@ -863,7 +920,6 @@ export default function Home() {
             if (distance < minDistance && distance > 0.001) {
               // Collision detected - calculate collision response
               collided = true;
-              flagCollisionThisFrame = true;
               
               // Normalize collision vector
               const nx = dx / distance;
@@ -903,8 +959,6 @@ export default function Home() {
           
           return f;
         });
-
-        if (flagCollisionThisFrame) playBumpSound(audioContextRef, lastBumpSoundRef, customBumpBufferRef, "flag");
 
         // Keep bouncing speed from slowing down: enforce minimum velocity (no long-term drift)
         const finalFlagsWithMinSpeed = finalFlags.map((f) => {
@@ -995,6 +1049,15 @@ export default function Home() {
         // Count active flags (not eliminated, not falling, not exiting) after processing eliminations
         const active = recalculatedFlags.filter((f) => !f.eliminated && !f.falling && !f.exiting);
         const prevActiveCount = prev.filter((f) => !f.eliminated && !f.falling && !f.exiting).length;
+        
+        // Remain 20: play when remaining hits 20
+        if (active.length === 20 && prevActiveCount > 20) {
+          playOneShotSound(audioContextRef, remain20BufferRef, REMAIN20_SOUND_URL);
+        }
+        // Remain 5: play when remaining hits 5
+        if (active.length === 5 && prevActiveCount > 5) {
+          playOneShotSound(audioContextRef, remain5BufferRef, REMAIN5_SOUND_URL);
+        }
         
         // Game over when 2nd-to-last flag is eliminated (when going from 2 to 1)
         if (active.length === 1 && prevActiveCount === 2) {
@@ -1125,6 +1188,18 @@ export default function Home() {
 
     return () => clearTimeout(timer);
   }, [nextRoundCountdown, startGame]);
+
+  // Text-to-speech: "Congratulate [Country Name]" when a country wins
+  useEffect(() => {
+    if (gameState !== "finished" || !winner || lastSpokenWinnerRef.current === winner.code) return;
+    lastSpokenWinnerRef.current = winner.code;
+    if (typeof window === "undefined" || !window.speechSynthesis) return;
+    const text = `Congratulations, ${winner.name}!`;
+    const utterance = new SpeechSynthesisUtterance(text);
+    utterance.rate = 0.9;
+    utterance.pitch = 1;
+    window.speechSynthesis.speak(utterance);
+  }, [gameState, winner]);
 
   // Slider: pick 2 random countries every 2s (left-to-right slide)
   useEffect(() => {
