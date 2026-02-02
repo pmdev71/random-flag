@@ -97,8 +97,8 @@ function isInGap(angle: number, gapRotation: number, gapAngleDegrees: number): b
 // Custom bump sound: public/sounds/bump.wav
 const BUMP_SOUND_URL = "/sounds/bump.wav";
 const START_SOUND_URL = "/sounds/start.wav";
-const REMAIN20_SOUND_URL = "/sounds/remain20.wav";
 const REMAIN5_SOUND_URL = "/sounds/remain5.wav";
+const CELEBRATION_SOUND_URL = "/sounds/celibration.WAV";
 
 // Play a one-shot sound from URL (loads and caches in bufferRef, plays when decoded)
 function playOneShotSound(
@@ -222,8 +222,8 @@ export default function Home() {
   const lastBumpSoundRef = useRef(0);
   const customBumpBufferRef = useRef<AudioBuffer | null>(null);
   const startBufferRef = useRef<AudioBuffer | null>(null);
-  const remain20BufferRef = useRef<AudioBuffer | null>(null);
   const remain5BufferRef = useRef<AudioBuffer | null>(null);
+  const celebrationBufferRef = useRef<AudioBuffer | null>(null);
   const lastSpokenWinnerRef = useRef<string | null>(null);
   const [gameState, setGameState] = useState<GameState>("idle");
   const [flags, setFlags] = useState<BouncingFlag[]>([]);
@@ -280,8 +280,8 @@ export default function Home() {
       };
       preload(BUMP_SOUND_URL, customBumpBufferRef);
       preload(START_SOUND_URL, startBufferRef);
-      preload(REMAIN20_SOUND_URL, remain20BufferRef);
       preload(REMAIN5_SOUND_URL, remain5BufferRef);
+      preload(CELEBRATION_SOUND_URL, celebrationBufferRef);
     }
 
     // Calculate flag size based on flag count
@@ -403,27 +403,17 @@ export default function Home() {
         const ROTATION_SPEED = 0.15; // Rotation speed (degrees per millisecond)
         const FADE_SPEED = 0.0015; // opacity per millisecond
 
-        // Calculate stack bottom position - below the circle area, above the button area
+        // Pile zone: below circle, above bottom bar (viewport coords)
         const screenHeight = window.innerHeight || containerHeight;
         const screenWidth = window.innerWidth || containerWidth;
-        // Button area is fixed at bottom with p-4 (16px padding) and button height (~48px)
-        const isMobile = screenWidth < 768;
-        const buttonAreaHeight = isMobile ? 80 : 0;
-        
-        // Calculate the bottom edge of the circle area to prevent overlap
-        // The circle is centered and has radius 0.42 (42% of container)
-        // Container is aspect-square with max size of min(100vw, 100vh)
+        const BOTTOM_BAR_HEIGHT = 80; // Reserve space for fixed bottom bar on all screens
         const containerRect = containerEl ? containerEl.getBoundingClientRect() : null;
         const circleContainerSize = containerRect ? Math.min(containerRect.width, containerRect.height) : Math.min(screenWidth, screenHeight);
         const circleRadius = circleContainerSize * 0.42;
         const circleCenterY = containerRect ? containerRect.top + containerRect.height / 2 : screenHeight / 2;
         const circleBottomEdge = circleCenterY + circleRadius;
-        
-        // Stack flags below the circle with some padding (20px gap from circle)
-        const circleBottomWithPadding = circleBottomEdge + 20;
-        
-        // Use the lower of: screen bottom minus button area, or just above the bottom
-        const stackBottom = screenHeight - buttonAreaHeight;
+        const circleBottomWithPadding = circleBottomEdge + 16;
+        const stackBottom = screenHeight - BOTTOM_BAR_HEIGHT;
 
         // Update falling flags - let them stack at the bottom
         // First, process all flags to determine which ones are stacking
@@ -464,13 +454,7 @@ export default function Home() {
           }
           
           if (f.falling && f.fallY !== undefined && f.fallOpacity !== undefined) {
-            // If already stacked, keep position stable (don't recalculate)
-            if (f.stacked) {
-              return {
-                ...f,
-                fallOpacity: Math.max(0.7, f.fallOpacity), // Maintain opacity
-              };
-            }
+            if (f.stacked) return f;
             
             // Calculate fall physics with acceleration (gravity)
             const fallStartTime = f.fallStartTime || time;
@@ -487,95 +471,55 @@ export default function Home() {
             // Calculate rotation (tumbling effect)
             const newRotation = (f.fallRotation !== undefined ? f.fallRotation : 0) + ROTATION_SPEED * dt * currentVelocity;
             
-            // Add slight horizontal drift (air resistance effect)
-            const driftSpeed = 0.02 * currentVelocity; // Drift increases with fall speed
+            // Horizontal movement and screen-border bump (left/right)
+            const driftSpeed = 0.025 * currentVelocity;
             const driftDirection = f.fallDriftX !== undefined ? (f.fallDriftX > 0 ? 1 : -1) : (Math.random() > 0.5 ? 1 : -1);
-            const newDriftX = (f.fallDriftX !== undefined ? f.fallDriftX : driftDirection * 0.5) + driftSpeed * dt * driftDirection * (Math.random() - 0.5);
-            
-            const containerLeft = containerEl ? containerEl.getBoundingClientRect().left + window.scrollX : 0;
-            
-            // Use smaller flag size for stacking (60% of original)
+            let newDriftX = (f.fallDriftX !== undefined ? f.fallDriftX : driftDirection * 0.5) + driftSpeed * dt * driftDirection * (0.3 + Math.random() * 0.4);
             const stackFlagSize = Math.floor(flagSize * 0.6);
+            const padding = Math.max(12, stackFlagSize / 2);
+            let newFallX = (f.fallX ?? screenWidth / 2) + newDriftX * dt * 0.8;
+            // Bump screen left/right border and bounce
+            if (newFallX < padding) {
+              newFallX = padding;
+              newDriftX = Math.abs(newDriftX) * 0.6;
+            } else if (newFallX > screenWidth - padding) {
+              newFallX = screenWidth - padding;
+              newDriftX = -Math.abs(newDriftX) * 0.6;
+            }
             
-            // Check if this flag has reached the bottom
+            // Reached bottom — place in messy pile with 5–10% overlap (not fully covering)
             if (newFallY >= stackBottom - stackFlagSize) {
-              // Get all already stacked flags
-              const alreadyStackedFlags = prev.filter(
-                (other) => 
-                  other.stacked === true &&
-                  other.eliminatedOrder !== undefined &&
-                  other.eliminatedOrder < (f.eliminatedOrder || Infinity)
-              );
-              
-              const alreadyStacked = alreadyStackedFlags.length;
-              const screenCenterX = screenWidth / 2;
-              
-              // Professional grid layout with better spacing
-              const horizontalPadding = Math.max(20, stackFlagSize * 0.5); // Padding from screen edges
-              const availableWidth = screenWidth - (horizontalPadding * 2);
-              const spacing = stackFlagSize * 1.15; // Slightly more spacing for cleaner look
-              const maxFlagsPerRow = Math.max(1, Math.floor(availableWidth / spacing));
-              
-              // Calculate row and position
-              const rowIndex = Math.floor(alreadyStacked / maxFlagsPerRow);
-              const positionInRow = alreadyStacked % maxFlagsPerRow;
-              
-              // Count how many flags are actually in this row (including current flag)
-              const flagsInSameRow = alreadyStackedFlags.filter(
-                (other) => {
-                  const otherRowIndex = Math.floor((other.eliminatedOrder || 0) / maxFlagsPerRow);
-                  return otherRowIndex === rowIndex;
-                }
-              ).length + 1; // +1 for current flag
-              
-              // Use actual count for this row to center properly
-              const actualFlagsInRow = Math.min(flagsInSameRow, maxFlagsPerRow);
-              
-              // Calculate Y position with consistent row height
-              const rowHeight = stackFlagSize * 0.95; // Slightly tighter vertical spacing
-              let rowY = stackBottom - stackFlagSize - (rowIndex * rowHeight);
-              
-              // Clamp rowY so flags don't stack into the circle area
-              // If rowY would be above the circle bottom edge, hide the flag (very low opacity)
-              const isAboveCircle = rowY < circleBottomWithPadding;
-              if (isAboveCircle) {
-                rowY = circleBottomWithPadding; // Clamp to just below circle
-              }
-              
-              // Calculate X position - center the block of flags in the row (equal space left & right)
-              const gapBetweenFlags = stackFlagSize * 0.15;
-              const rowContentWidth = actualFlagsInRow * stackFlagSize + (actualFlagsInRow - 1) * gapBetweenFlags;
-              const firstFlagCenterX = (screenWidth - rowContentWidth) / 2 + stackFlagSize / 2;
-              const rowX = firstFlagCenterX + positionInRow * (stackFlagSize + gapBetweenFlags);
-              
-              // Hill shape: lift center of row so stack forms a mound (peak at screen center)
-              const HILL_PEAK = 28;
-              const hillCenterX = screenWidth / 2;
-              const hillRadiusX = screenWidth * 0.42;
-              const distFromCenterX = (rowX - hillCenterX) / (hillRadiusX || 1);
-              const hillOffset = HILL_PEAK * Math.max(0, 1 - distFromCenterX * distFromCenterX);
-              const rowYOnHill = rowY - hillOffset;
-              
-              // Keep opacity visible and consistent - but hide if overlapping circle
-              const finalOpacity = isAboveCircle ? 0 : Math.max(0.75, f.fallOpacity);
-              
+              const pad = Math.max(12, stackFlagSize * 0.5);
+              const pileTop = circleBottomWithPadding + 8;
+              const pileBottom = stackBottom - stackFlagSize - 8;
+              const order = f.eliminatedOrder ?? 0;
+              // Scattered positions: no rows, all flags visible across full pile area
+              const pileHeight = Math.max(60, pileBottom - pileTop);
+ // ~18% gap between rows so rows don’t collapse
+              const availableWidth = screenWidth - pad * 2 - stackFlagSize;
+              const seedX = (order * 37 + order * 7) % 1000;
+              const seedY = (order * 23 + order * 11) % 1000;
+              const pileX = pad + stackFlagSize / 2 + (seedX / 1000) * availableWidth;
+              const pileY = pileTop + stackFlagSize / 2 + (seedY / 1000) * pileHeight;
+              const clampedY = Math.max(pileTop + stackFlagSize / 2, Math.min(pileBottom - stackFlagSize / 2, pileY));
+              const pileRotation = ((order * 13) % 36) - 18;
               return {
                 ...f,
-                fallY: rowYOnHill,
-                fallX: rowX,
-                fallOpacity: finalOpacity,
-                fallRotation: 0, // Reset rotation when stacked for clean alignment
-                stacked: true, // Mark as stacked - position is now fixed
+                fallX: Math.max(pad + stackFlagSize / 2, Math.min(screenWidth - pad - stackFlagSize / 2, pileX)),
+                fallY: clampedY,
+                fallOpacity: 1,
+                fallRotation: pileRotation,
+                stacked: true,
               };
             }
             
-            // Still falling - continue animation with physics
-            // Fade opacity gradually, but slower as it falls faster
+            // Still falling - continue animation with physics (with screen-border bump)
             const fadeMultiplier = Math.max(0.3, 1 - (currentVelocity / MAX_FALL_VELOCITY) * 0.5);
             const newOpacity = Math.max(0.8, f.fallOpacity - dt * FADE_SPEED * fadeMultiplier);
             
             return {
               ...f,
+              fallX: newFallX,
               fallY: newFallY,
               fallOpacity: newOpacity,
               fallRotation: newRotation,
@@ -968,89 +912,13 @@ export default function Home() {
           return f;
         });
         
-        // Recalculate positions for all stacked flags to ensure proper centering
-        // Group flags by row and recalculate their positions
-        // Reuse existing variables (screenHeight, isMobile, buttonAreaHeight, stackBottom are already defined above)
-        // Use smaller flag size for stacking (60% of original)
-        const recalcStackFlagSize = Math.floor(flagSize * 0.6);
-        const recalcScreenWidth = window.innerWidth || (containerEl ? containerEl.offsetWidth : 0);
-        const recalcScreenCenterX = recalcScreenWidth / 2;
-        const recalcHorizontalPadding = Math.max(20, recalcStackFlagSize * 0.5);
-        const recalcAvailableWidth = recalcScreenWidth - (recalcHorizontalPadding * 2);
-        const recalcSpacing = recalcStackFlagSize * 1.15;
-        const recalcMaxFlagsPerRow = Math.max(1, Math.floor(recalcAvailableWidth / recalcSpacing));
-        
-        // Group stacked flags by row
-        const flagsByRow = new Map<number, typeof finalFlagsWithMinSpeed>();
-        finalFlagsWithMinSpeed.forEach((f) => {
-          if (f.stacked && f.eliminatedOrder !== undefined) {
-            const rowIndex = Math.floor((f.eliminatedOrder - 1) / recalcMaxFlagsPerRow);
-            if (!flagsByRow.has(rowIndex)) {
-              flagsByRow.set(rowIndex, []);
-            }
-            flagsByRow.get(rowIndex)!.push(f);
-          }
-        });
-        
-        // Recalculate positions for each row to ensure proper centering
-        const recalculatedFlags = finalFlagsWithMinSpeed.map((f) => {
-          if (f.stacked && f.eliminatedOrder !== undefined) {
-            const rowIndex = Math.floor((f.eliminatedOrder - 1) / recalcMaxFlagsPerRow);
-            const rowFlags = flagsByRow.get(rowIndex) || [];
-            const sortedRowFlags = [...rowFlags].sort((a, b) => (a.eliminatedOrder || 0) - (b.eliminatedOrder || 0));
-            const positionInRow = sortedRowFlags.findIndex((flag) => flag.eliminatedOrder === f.eliminatedOrder);
-            const actualFlagsInRow = sortedRowFlags.length;
-            
-            if (positionInRow >= 0) {
-              const rowHeight = recalcStackFlagSize * 0.95;
-              let rowY = stackBottom - recalcStackFlagSize - (rowIndex * rowHeight);
-              
-              // Clamp rowY so flags don't stack into the circle area
-              const isAboveCircle = rowY < circleBottomWithPadding;
-              if (isAboveCircle) {
-                rowY = circleBottomWithPadding;
-              }
-              
-              // Center the block of flags in the row (equal space left & right)
-              const gapBetweenFlags = recalcStackFlagSize * 0.15;
-              const rowContentWidth = actualFlagsInRow * recalcStackFlagSize + (actualFlagsInRow - 1) * gapBetweenFlags;
-              const firstFlagCenterX = (recalcScreenWidth - rowContentWidth) / 2 + recalcStackFlagSize / 2;
-              const rowX = firstFlagCenterX + positionInRow * (recalcStackFlagSize + gapBetweenFlags);
-              
-              // Hill shape: 2D mound (peak at screen center and middle row)
-              const HILL_PEAK_X = 28;
-              const HILL_PEAK_Y = 14;
-              const hillCenterX = recalcScreenWidth / 2;
-              const hillRadiusX = recalcScreenWidth * 0.42;
-              const totalRows = flagsByRow.size;
-              const centerRow = (totalRows - 1) / 2;
-              const radiusRow = Math.max(1, totalRows * 0.5);
-              const distFromCenterX = (rowX - hillCenterX) / (hillRadiusX || 1);
-              const horizontalFactor = Math.max(0, 1 - distFromCenterX * distFromCenterX);
-              const distFromCenterRow = (rowIndex - centerRow) / radiusRow;
-              const verticalFactor = Math.max(0, 1 - distFromCenterRow * distFromCenterRow);
-              const hillOffset = HILL_PEAK_X * horizontalFactor + HILL_PEAK_Y * verticalFactor;
-              const rowYOnHill = rowY - hillOffset;
-              
-              return {
-                ...f,
-                fallX: rowX,
-                fallY: rowYOnHill,
-                fallOpacity: isAboveCircle ? 0 : f.fallOpacity, // Hide if overlapping circle
-              };
-            }
-          }
-          return f;
-        });
+        // Keep stacked flags at their messy-pile positions (no recalc)
+        const recalculatedFlags = finalFlagsWithMinSpeed;
         
         // Count active flags (not eliminated, not falling, not exiting) after processing eliminations
         const active = recalculatedFlags.filter((f) => !f.eliminated && !f.falling && !f.exiting);
         const prevActiveCount = prev.filter((f) => !f.eliminated && !f.falling && !f.exiting).length;
         
-        // Remain 20: play when remaining hits 20
-        if (active.length === 20 && prevActiveCount > 20) {
-          playOneShotSound(audioContextRef, remain20BufferRef, REMAIN20_SOUND_URL);
-        }
         // Remain 5: play when remaining hits 5
         if (active.length === 5 && prevActiveCount > 5) {
           playOneShotSound(audioContextRef, remain5BufferRef, REMAIN5_SOUND_URL);
@@ -1187,14 +1055,21 @@ export default function Home() {
   }, [nextRoundCountdown, startGame]);
 
   // Text-to-speech: "Congratulate [Country Name]" when a country wins — use female voice
+  // Also play celebration sound
   useEffect(() => {
     if (gameState !== "finished" || !winner || lastSpokenWinnerRef.current === winner.code) return;
     lastSpokenWinnerRef.current = winner.code;
+    
+    // Play celebration sound
+    playOneShotSound(audioContextRef, celebrationBufferRef, CELEBRATION_SOUND_URL);
+    
+    // Text-to-speech
     if (typeof window === "undefined" || !window.speechSynthesis) return;
     const text = `Congratulations, ${winner.name}!`;
     const utterance = new SpeechSynthesisUtterance(text);
     utterance.rate = 0.9;
     utterance.pitch = 1;
+    utterance.volume = 1;
     const voices = window.speechSynthesis.getVoices();
     const femaleVoice =
       voices.find((v) => v.name.toLowerCase().includes("female")) ??
@@ -1452,7 +1327,7 @@ export default function Home() {
       </Modal>
 
       {/* Game arena: top-to-bottom sections — safe area, Top 9 (optional), Slider, Game circle, bottom bar reserved */}
-      <div className="absolute inset-0 flex flex-col items-center overflow-hidden pt-4 pb-20">
+      <div className="absolute inset-0 flex flex-col items-center overflow-hidden pt-2 pb-2">
         {/* Section 1: Top 9 (when loop + winner counts) — in flow, flex-shrink-0 */}
         {loopEnabled && Object.keys(winnerCounts).length > 0 && (() => {
           const sorted = Object.entries(winnerCounts).sort(([, a], [, b]) => b - a);
@@ -1500,15 +1375,15 @@ export default function Home() {
                     animate={{ opacity: 1 }}
                     exit={{ opacity: 0 }}
                     transition={{ duration: 0.2 }}
-                    className="flex items-center gap-2 rounded-md bg-transparent dark:bg-transparent px-2.5 py-1.5 text-md"
+                    className="flex items-center gap-2 rounded-md bg-transparent dark:bg-transparent px-2.5 py-1"
                   >
-                  <span className="text-lg">{typingCountry.flag}</span>
-                  <span className="font-medium text-gray-800 dark:text-gray-200 min-w-[1ch]">
+                  <span className="text-3xl">{typingCountry.flag}</span>
+                  <span className="text-3xl font-medium text-gray-800 dark:text-gray-200 min-w-[1ch]">
                     {typingCountry.name.slice(0, typingLength)}
                     <motion.span
                       animate={{ opacity: [1, 0] }}
                       transition={{ duration: 0.5, repeat: Infinity }}
-                      className="inline-block text-amber-600 dark:text-amber-400"
+                      className="inline-block text-3xl text-amber-600 dark:text-amber-400"
                       aria-hidden
                     >
                       |
@@ -1525,7 +1400,7 @@ export default function Home() {
         <div className="flex-1 min-h-0 w-full flex items-start justify-center overflow-hidden px-1">
           <div
             ref={containerRef}
-            className="relative w-full h-full max-w-[min(100vw,100vh)] max-h-[min(100vw,100vh)] aspect-square rounded-3xl border-0 bg-gray-50/50 dark:bg-gray-800/50 overflow-hidden shrink-0"
+            className="relative w-full h-full max-w-[min(100vw,100vh)] max-h-[min(100vw,100vh)] overflow-hidden shrink-0"
           >
             {/* Remaining flag count - top left of circle */}
             {gameState === "playing" && (
@@ -1667,7 +1542,7 @@ export default function Home() {
                 </motion.div>
 
                 {/* Sparkles around center - two rings, varied size & timing */}
-                {[...Array(20)].map((_, i) => {
+                {/* {[...Array(20)].map((_, i) => {
                   const angle = (i / 20) * 360;
                   const isOuter = i % 2 === 0;
                   const r = isOuter ? 28 : 18;
@@ -1700,7 +1575,7 @@ export default function Home() {
                       />
                     </motion.div>
                   );
-                })}
+                })} */}
 
                 <motion.p
                   initial={{ opacity: 0, y: 8 }}
@@ -1797,77 +1672,38 @@ export default function Home() {
             );
           })}
 
-        {/* Falling & stacked flags: tumble with velocity-based shadow, layered stack */}
-        {/* {flags
-          .filter((f): f is typeof f & { fallY: number; fallOpacity: number } =>
-            Boolean(f.falling && f.fallY != null && f.fallOpacity != null)
+        {/* Falling & stacked flags: viewport overlay, messy pile below circle / above bottom bar */}
+        {flags
+          .filter((f): f is typeof f & { fallX: number; fallY: number; fallOpacity: number } =>
+            Boolean(f.falling && f.fallX != null && f.fallY != null && f.fallOpacity != null)
           )
           .map((f) => {
-            const container = containerRef.current;
-            const containerWidth = container?.offsetWidth ?? 0;
-            const containerRect = container?.getBoundingClientRect() ?? null;
-            const fallingFlagSize = Math.floor(flagSize * 0.6);
-            const fallingEmojiSize = Math.max(10, Math.floor(fallingFlagSize * 0.6));
-            let fallX =
-              f.fallX ??
-              (containerRect ? containerRect.left : 0) + containerWidth * (cx + (f.x ?? 0) * scale);
-            const screenWidth = typeof window !== "undefined" ? window.innerWidth : containerWidth;
-            const padding = fallingFlagSize / 2;
-            fallX = Math.max(padding, Math.min(screenWidth - padding, fallX));
-            const stackDelay = f.eliminatedOrder != null ? (f.eliminatedOrder - 1) * 0.1 : 0;
-            const fallScale = f.stacked ? 1 : Math.max(0.82, 1 - (f.fallVelocity ?? 0) * 0.12);
-            const rotation = f.stacked ? 0 : (f.fallRotation ?? 0);
-            const driftX = f.stacked ? 0 : (f.fallDriftX ?? 0) * 20;
-            const adjustedFallX = fallX + driftX;
-            const velocity = f.fallVelocity ?? 0;
-            const shadowOffset = f.stacked ? 2 : Math.min(4 + velocity * 3, 12);
-            const shadowBlur = f.stacked ? 4 : Math.min(6 + velocity * 4, 16);
+            const size = Math.floor(flagSize * 0.6);
             const order = f.eliminatedOrder ?? 0;
+            const rotation = f.fallRotation ?? 0;
+            const scale = f.stacked ? 1 : Math.max(0.85, 1 - (f.fallVelocity ?? 0) * 0.1);
+            const isStacked = f.stacked ?? false;
             return (
-              <motion.div
-                key={`falling-${f.id}-${order}`}
-                className="absolute flex items-center justify-center rounded-lg pointer-events-none overflow-visible"
+              <div
+                key={`pile-${f.id}-${order}`}
+                className="absolute flex items-center justify-center rounded-lg pointer-events-none"
                 style={{
-                  width: fallingFlagSize,
-                  height: fallingFlagSize,
-                  fontSize: fallingEmojiSize,
-                  left: adjustedFallX,
+                  width: size,
+                  height: size,
+                  fontSize: Math.max(12, Math.floor(size * 0.6)),
+                  left: f.fallX,
                   top: f.fallY,
-                  zIndex: 30 + order,
+                  zIndex: 35 + order,
                   opacity: f.fallOpacity,
-                  transform: `translate(-50%, -50%) rotate(${rotation}deg) scale(${fallScale})`,
+                  transform: `translate(-50%, -50%) rotate(${rotation}deg) scale(${scale})`,
                   transformOrigin: "center center",
-                  filter: `drop-shadow(0 ${shadowOffset}px ${shadowBlur}px rgba(0,0,0,0.2)) drop-shadow(0 1px 3px rgba(0,0,0,0.12))`,
-                  transition: f.stacked
-                    ? "left 0.35s cubic-bezier(0.34, 1.2, 0.64, 1), top 0.35s cubic-bezier(0.34, 1.2, 0.64, 1), transform 0.35s cubic-bezier(0.34, 1.2, 0.64, 1), filter 0.25s ease-out"
-                    : "transform 0.06s linear, opacity 0.08s ease-out, filter 0.1s ease-out",
-                  willChange: f.stacked ? "transform, left, top, filter" : "transform, opacity, filter",
+                  transition: isStacked ? "transform 0.2s ease-out" : "none",
                 }}
-                initial={false}
-                animate={
-                  f.stacked
-                    ? {
-                        y: [0, -5, 0],
-                        scale: [1, 1.04, 1],
-                      }
-                    : {}
-                }
-                transition={
-                  f.stacked
-                    ? {
-                        duration: 0.9,
-                        delay: stackDelay * 0.4,
-                        repeat: Infinity,
-                        repeatDelay: 0.2,
-                        ease: "easeInOut",
-                      }
-                    : {}
-                }
               >
                 {f.country.flag}
-              </motion.div>
+              </div>
             );
-          })} */}
+          })}
       </div>
 
       {/* Toast Container */}
