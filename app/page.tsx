@@ -14,6 +14,8 @@ import {
   Sparkles,
   Sun,
   Moon,
+  Volume2,
+  VolumeX,
 } from "lucide-react";
 import { ToastContainer, useToast } from "@/components/toast";
 import { useTheme } from "@/app/providers/theme-provider";
@@ -104,9 +106,10 @@ const CELEBRATION_SOUND_URL = "/sounds/celibration.WAV";
 function playOneShotSound(
   audioContextRef: { current: AudioContext | null },
   bufferRef: { current: AudioBuffer | null },
-  url: string
+  url: string,
+  muted?: boolean
 ) {
-  if (typeof window === "undefined" || !url) return;
+  if (typeof window === "undefined" || !url || muted) return;
   try {
     if (!audioContextRef.current) {
       audioContextRef.current = new (window.AudioContext || (window as unknown as { webkitAudioContext: typeof AudioContext }).webkitAudioContext)();
@@ -150,9 +153,10 @@ function playBumpSound(
   lastPlayedRef: { current: number },
   customBumpBufferRef: { current: AudioBuffer | null },
   type: "wall" | "flag",
-  throttleMs: number = 45
+  throttleMs: number = 45,
+  muted?: boolean
 ) {
-  if (typeof window === "undefined") return;
+  if (typeof window === "undefined" || muted) return;
   const now = performance.now();
   if (now - lastPlayedRef.current < throttleMs) return;
   lastPlayedRef.current = now;
@@ -246,6 +250,19 @@ export default function Home() {
     }
     return null;
   });
+  const [soundMuted, setSoundMuted] = useState<boolean>(() => {
+    if (typeof window !== "undefined") {
+      return localStorage.getItem("soundMuted") === "1";
+    }
+    return false;
+  });
+  const [stackedFlagsVisible, setStackedFlagsVisible] = useState<boolean>(() => {
+    if (typeof window !== "undefined") {
+      const stored = localStorage.getItem("stackedFlagsVisible");
+      return stored === null || stored === "1";
+    }
+    return true;
+  });
   const [typingCountry, setTypingCountry] = useState<Country | null>(() =>
     countries[Math.floor(Math.random() * countries.length)]
   );
@@ -273,6 +290,24 @@ export default function Home() {
       }
     }
   }, [customBackgroundColor]);
+
+  // Save sound muted to localStorage
+  useEffect(() => {
+    if (typeof window !== "undefined") {
+      if (soundMuted) {
+        localStorage.setItem("soundMuted", "1");
+      } else {
+        localStorage.removeItem("soundMuted");
+      }
+    }
+  }, [soundMuted]);
+
+  // Save stacked flags visible to localStorage
+  useEffect(() => {
+    if (typeof window !== "undefined") {
+      localStorage.setItem("stackedFlagsVisible", stackedFlagsVisible ? "1" : "0");
+    }
+  }, [stackedFlagsVisible]);
 
   const cx = 0.5;
   const cy = 0.5;
@@ -355,8 +390,8 @@ export default function Home() {
     setGameState("playing");
     setSettingsModalOpen(false);
     // Play start round sound
-    playOneShotSound(audioContextRef, startBufferRef, START_SOUND_URL);
-  }, [flagCount]);
+    playOneShotSound(audioContextRef, startBufferRef, START_SOUND_URL, soundMuted);
+  }, [flagCount, soundMuted]);
 
   const resetGame = useCallback(() => {
     if (rafRef.current) cancelAnimationFrame(rafRef.current);
@@ -846,7 +881,7 @@ export default function Home() {
           return { ...f, x, y };
         });
 
-        if (wallBounceThisFrame) playBumpSound(audioContextRef, lastBumpSoundRef, customBumpBufferRef, "wall");
+        if (wallBounceThisFrame) playBumpSound(audioContextRef, lastBumpSoundRef, customBumpBufferRef, "wall", 45, soundMuted);
 
         // Flag-to-flag collision detection and response
         // Check each flag against all other flags for collisions
@@ -938,7 +973,7 @@ export default function Home() {
         
         // Remain 5: play when remaining hits 5
         if (active.length === 5 && prevActiveCount > 5) {
-          playOneShotSound(audioContextRef, remain5BufferRef, REMAIN5_SOUND_URL);
+          playOneShotSound(audioContextRef, remain5BufferRef, REMAIN5_SOUND_URL, soundMuted);
         }
         
         // Game over when 2nd-to-last flag is eliminated (when going from 2 to 1)
@@ -970,7 +1005,7 @@ export default function Home() {
     return () => {
       if (rafRef.current) cancelAnimationFrame(rafRef.current);
     };
-  }, [gameState, speedMult, flags.length, gapRotationEnabled, gapRotationSpeed, gapSize, loopEnabled, winnerCounts]);
+  }, [gameState, speedMult, flags.length, gapRotationEnabled, gapRotationSpeed, gapSize, loopEnabled, winnerCounts, soundMuted]);
 
   // Calculate dynamic flag size based on flag count
   const flagSize = getFlagSize(flagCount);
@@ -1078,7 +1113,7 @@ export default function Home() {
     lastSpokenWinnerRef.current = winner.code;
     
     // Play celebration sound
-    playOneShotSound(audioContextRef, celebrationBufferRef, CELEBRATION_SOUND_URL);
+    playOneShotSound(audioContextRef, celebrationBufferRef, CELEBRATION_SOUND_URL, soundMuted);
     
     // Text-to-speech
     if (typeof window === "undefined" || !window.speechSynthesis) return;
@@ -1231,8 +1266,8 @@ export default function Home() {
                 ))}
               </div>
             </div>
-          </div>
-          <div className="flex items-center justify-between">
+          </div> */}
+          {/* <div className="flex items-center justify-between">
             <span className="text-sm font-medium text-gray-700 dark:text-gray-300">
               Speed
             </span>
@@ -1251,8 +1286,8 @@ export default function Home() {
                 </button>
               ))}
             </div>
-          </div>
-          <div className="flex items-center justify-between">
+          </div> */}
+          {/* <div className="flex items-center justify-between">
             <span className="text-sm font-medium text-gray-700 dark:text-gray-300">
               Rotating gap
             </span>
@@ -1270,7 +1305,7 @@ export default function Home() {
                 }`}
               />
             </button>
-          </div>
+          </div> */}
           {gapRotationEnabled && (
             <div className="flex items-center justify-between">
               <span className="text-sm font-medium text-gray-700 dark:text-gray-300">
@@ -1327,7 +1362,7 @@ export default function Home() {
               </div>
             </div>
           </div>
-          <div className="flex items-center justify-between">
+          {/* <div className="flex items-center justify-between">
             <span className="text-sm font-medium text-gray-700 dark:text-gray-300">
               Auto loop rounds
             </span>
@@ -1345,7 +1380,48 @@ export default function Home() {
                 }`}
               />
             </button>
-          </div> */}
+          </div>  */}
+          <div className="flex items-center justify-between">
+            <span className="text-sm font-medium text-gray-700 dark:text-gray-300 flex items-center gap-2">
+              {soundMuted ? <VolumeX className="h-5 w-5" /> : <Volume2 className="h-5 w-5" />}
+              Mute sound
+            </span>
+            <button
+              onClick={() => setSoundMuted(!soundMuted)}
+              className={`relative inline-flex h-6 w-11 items-center rounded-full transition-colors ${
+                soundMuted
+                  ? "bg-gray-400 dark:bg-gray-500"
+                  : "bg-blue-600 dark:bg-blue-500"
+              }`}
+              aria-label={soundMuted ? "Unmute sound" : "Mute sound"}
+            >
+              <span
+                className={`inline-block h-4 w-4 transform rounded-full bg-white transition-transform ${
+                  soundMuted ? "translate-x-1" : "translate-x-6"
+                }`}
+              />
+            </button>
+          </div>
+          <div className="flex items-center justify-between">
+            <span className="text-sm font-medium text-gray-700 dark:text-gray-300">
+              Show stacked flags
+            </span>
+            <button
+              onClick={() => setStackedFlagsVisible(!stackedFlagsVisible)}
+              className={`relative inline-flex h-6 w-11 items-center rounded-full transition-colors ${
+                stackedFlagsVisible
+                  ? "bg-blue-600 dark:bg-blue-500"
+                  : "bg-gray-400 dark:bg-gray-500"
+              }`}
+              aria-label={stackedFlagsVisible ? "Hide stacked flags" : "Show stacked flags"}
+            >
+              <span
+                className={`inline-block h-4 w-4 transform rounded-full bg-white transition-transform ${
+                  stackedFlagsVisible ? "translate-x-6" : "translate-x-1"
+                }`}
+              />
+            </button>
+          </div>
           <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
             <span className="text-sm font-medium text-gray-700 dark:text-gray-300">
               Background Color
@@ -1716,10 +1792,11 @@ export default function Home() {
             );
           })}
 
-        {/* Falling & stacked flags: viewport overlay, messy pile below circle / above bottom bar */}
+        {/* Falling & stacked flags: viewport overlay, messy pile below circle / above bottom bar. Stacked pile visibility is toggled by setting. */}
         {flags
           .filter((f): f is typeof f & { fallX: number; fallY: number; fallOpacity: number } =>
-            Boolean(f.falling && f.fallX != null && f.fallY != null && f.fallOpacity != null)
+            Boolean(f.falling && f.fallX != null && f.fallY != null && f.fallOpacity != null) &&
+            (stackedFlagsVisible || !f.stacked)
           )
           .map((f) => {
             const size = Math.floor(flagSize * 0.6);
