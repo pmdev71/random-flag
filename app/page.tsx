@@ -229,6 +229,7 @@ export default function Home() {
   const remain5BufferRef = useRef<AudioBuffer | null>(null);
   const celebrationBufferRef = useRef<AudioBuffer | null>(null);
   const lastSpokenWinnerRef = useRef<string | null>(null);
+  const currentSpeechUtteranceRef = useRef<SpeechSynthesisUtterance | null>(null);
   const [gameState, setGameState] = useState<GameState>("idle");
   const [flags, setFlags] = useState<BouncingFlag[]>([]);
   const [winner, setWinner] = useState<Country | null>(null);
@@ -387,6 +388,11 @@ export default function Home() {
     lastSpokenWinnerRef.current = null;
     setGapRotation(randomStartAngle);
     gameOverTriggeredRef.current = false;
+    // Cancel any ongoing speech before starting new round
+    if (typeof window !== "undefined" && window.speechSynthesis) {
+      window.speechSynthesis.cancel();
+      currentSpeechUtteranceRef.current = null;
+    }
     setGameState("playing");
     setSettingsModalOpen(false);
     // Play start round sound
@@ -395,6 +401,11 @@ export default function Home() {
 
   const resetGame = useCallback(() => {
     if (rafRef.current) cancelAnimationFrame(rafRef.current);
+    // Cancel any ongoing speech
+    if (typeof window !== "undefined" && window.speechSynthesis) {
+      window.speechSynthesis.cancel();
+      currentSpeechUtteranceRef.current = null;
+    }
     setGameState("idle");
     setFlags([]);
     setWinner(null);
@@ -1115,20 +1126,63 @@ export default function Home() {
     // Play celebration sound
     playOneShotSound(audioContextRef, celebrationBufferRef, CELEBRATION_SOUND_URL, soundMuted);
     
-    // Text-to-speech
+    // Text-to-speech - ensure voices are loaded first
     if (typeof window === "undefined" || !window.speechSynthesis) return;
-    const text = `Congratulations, ${winner.name}!`;
-    const utterance = new SpeechSynthesisUtterance(text);
-    utterance.rate = 0.9;
-    utterance.pitch = 1;
-    utterance.volume = 1;
+    
+    const speakWinner = () => {
+      // Cancel any previous speech
+      window.speechSynthesis.cancel();
+      
+      const text = `Congratulations, ${winner.name}!`;
+      const utterance = new SpeechSynthesisUtterance(text);
+      utterance.rate = 0.9;
+      utterance.pitch = 1;
+      utterance.volume = 1;
+      
+      // Get voices (may need to call multiple times if not loaded)
+      const voices = window.speechSynthesis.getVoices();
+      const femaleVoice =
+        voices.find((v) => v.name.toLowerCase().includes("female")) ??
+        voices.find((v) => /samantha|victoria|karen|moira|fiona|alice|emily|zira/i.test(v.name)) ??
+        voices.find((v) => v.lang.startsWith("en"));
+      
+      if (femaleVoice) {
+        utterance.voice = femaleVoice;
+      }
+      
+      // Store utterance reference
+      currentSpeechUtteranceRef.current = utterance;
+      
+      // Handle speech completion/errors
+      utterance.onend = () => {
+        currentSpeechUtteranceRef.current = null;
+      };
+      utterance.onerror = () => {
+        currentSpeechUtteranceRef.current = null;
+      };
+      
+      // Small delay to ensure speech synthesis is ready
+      setTimeout(() => {
+        if (window.speechSynthesis) {
+          window.speechSynthesis.speak(utterance);
+        }
+      }, 100);
+    };
+    
+    // Ensure voices are loaded before speaking
     const voices = window.speechSynthesis.getVoices();
-    const femaleVoice =
-      voices.find((v) => v.name.toLowerCase().includes("female")) ??
-      voices.find((v) => /samantha|victoria|karen|moira|fiona|alice|emily|zira/i.test(v.name)) ??
-      voices.find((v) => v.lang.startsWith("en"));
-    if (femaleVoice) utterance.voice = femaleVoice;
-    window.speechSynthesis.speak(utterance);
+    if (voices.length > 0) {
+      speakWinner();
+    } else {
+      // Wait for voices to load
+      const onVoicesChanged = () => {
+        window.speechSynthesis.removeEventListener("voiceschanged", onVoicesChanged);
+        speakWinner();
+      };
+      window.speechSynthesis.addEventListener("voiceschanged", onVoicesChanged);
+      // Also try to get voices immediately (sometimes triggers load)
+      window.speechSynthesis.getVoices();
+    }
   }, [gameState, winner]);
 
   // Ensure voices are loaded (Chrome loads them asynchronously)
