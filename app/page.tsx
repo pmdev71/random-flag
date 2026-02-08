@@ -1287,7 +1287,7 @@ export default function Home() {
         size="md"
       >
         <div className="space-y-6">
-          {/* <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
+          <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
             <span className="text-sm font-medium text-gray-700 dark:text-gray-300">
               Number of flags
             </span>
@@ -1320,7 +1320,7 @@ export default function Home() {
                 ))}
               </div>
             </div>
-          </div> */}
+          </div>
           {/* <div className="flex items-center justify-between">
             <span className="text-sm font-medium text-gray-700 dark:text-gray-300">
               Speed
