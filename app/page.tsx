@@ -312,8 +312,8 @@ export default function Home() {
 
   const cx = 0.5;
   const cy = 0.5;
-  const radius = 0.42;
-  const scale = 1; // Scale factor: logical coordinates map 1:1 to visual percentage (radius 0.42 = 42% visual)
+  const radius = 0.48;
+  const scale = 1; // Scale factor: logical coordinates map 1:1 to visual percentage (radius 0.48 = 48% visual)
 
   const startGame = useCallback(() => {
     // Create AudioContext on user gesture (unlocks audio) and preload sounds
@@ -472,7 +472,7 @@ export default function Home() {
         const BOTTOM_BAR_HEIGHT = 80; // Reserve space for fixed bottom bar on all screens
         const containerRect = containerEl ? containerEl.getBoundingClientRect() : null;
         const circleContainerSize = containerRect ? Math.min(containerRect.width, containerRect.height) : Math.min(screenWidth, screenHeight);
-        const circleRadius = circleContainerSize * 0.42;
+        const circleRadius = circleContainerSize * 0.48;
         const circleCenterY = containerRect ? containerRect.top + containerRect.height / 2 : screenHeight / 2;
         const circleBottomEdge = circleCenterY + circleRadius;
         const circleBottomWithPadding = circleBottomEdge + 16;
@@ -594,7 +594,7 @@ export default function Home() {
         });
 
         // Process new eliminations first
-        // Visual circle: radius = 0.42 (42% of container, matches SVG r="42" in viewBox 0-100)
+        // Visual circle: radius = 0.48 (48% of container, matches SVG r="48" in viewBox 0-100)
         // Check collision at the actual visual radius, then clamp flag center position
         // so flag edge aligns with the visual circle boundary
         // IMPORTANT: Use the smaller dimension to ensure circular boundary (not square)
@@ -838,7 +838,7 @@ export default function Home() {
             };
           }
           
-          // Check if flag center has crossed the visual circle boundary (radius 0.42)
+          // Check if flag center has crossed the visual circle boundary (radius 0.48)
           // Use circular distance check - this ensures circular bouncing area
           if (dist > radius) {
             // Flag crossed radius but not in gap - bounce back
@@ -1604,14 +1604,14 @@ export default function Home() {
               <circle
                 cx="50"
                 cy="50"
-                r="42"
+                r="48"
                 fill="rgba(59, 130, 246, 0.06)"
               />
               {/* Bouncing boundary marker - dashed circle showing bounce area */}
               <circle
                 cx="50"
                 cy="50"
-                r="42"
+                r="48"
                 fill="none"
                 stroke="rgba(59, 130, 246, 0.4)"
                 strokeWidth="0.6"
@@ -1636,7 +1636,7 @@ export default function Home() {
               {/* After -90deg rotation: what was right (angle 0) becomes top (angle -90deg) */}
               {/* So we draw gap centered at angle 0 before the path rotation */}
               <path
-                d={`M ${50 + 42 * Math.cos((gapSize / 2) * Math.PI / 180)} ${50 + 42 * Math.sin((gapSize / 2) * Math.PI / 180)} A 42 42 0 1 1 ${50 + 42 * Math.cos((360 - gapSize / 2) * Math.PI / 180)} ${50 + 42 * Math.sin((360 - gapSize / 2) * Math.PI / 180)}`}
+                d={`M ${50 + 48 * Math.cos((gapSize / 2) * Math.PI / 180)} ${50 + 48 * Math.sin((gapSize / 2) * Math.PI / 180)} A 48 48 0 1 1 ${50 + 48 * Math.cos((360 - gapSize / 2) * Math.PI / 180)} ${50 + 48 * Math.sin((360 - gapSize / 2) * Math.PI / 180)}`}
                 fill="none"
                 stroke="rgba(59, 130, 246, 0.9)"
                 strokeWidth="2"
@@ -1653,7 +1653,7 @@ export default function Home() {
               .map((f) => (
                 <motion.div
                   key={f.id}
-                  className="absolute flex items-center justify-center rounded-lg pointer-events-none -translate-x-1/2 -translate-y-1/2"
+                  className="absolute flex items-center justify-center pointer-events-none -translate-x-1/2 -translate-y-1/2"
                   style={{
                     width: flagSize,
                     height: flagSize,
