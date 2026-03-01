@@ -49,20 +49,33 @@ export class Player {
   /** Cooldown frames to prevent rapid repeated hits on same target */
   hitCooldown: number = 0;
 
+  /** Short flash timer used to render a hit effect when this player is struck */
+  hitFlashFrames: number = 0;
+
+  /** Previous sword tip position (for continuous collision detection) */
+  prevSwordTipX: number = 0;
+  prevSwordTipY: number = 0;
+
   constructor(config: PlayerConfig) {
     this.id = config.id;
     this.countryName = config.countryName;
     this.flagImage = config.flagImage;
     this.x = config.x;
     this.y = config.y;
-    this.radius = config.radius ?? 28;
+    this.radius = config.radius ?? 40;
     this.direction = Math.random() * Math.PI * 2;
     this.life = 100;
     this.swordLength = config.swordLength ?? 45;
     this.swordDamage = config.swordDamage ?? 2;
     this.moveSpeed = config.moveSpeed ?? 1.2;
-    // Slightly randomized rotation speed for variety
-    this.swordRotationSpeed = 0.04 + Math.random() * 0.03;
+    // Slightly randomized rotation speed and direction (clockwise / counter‑clockwise)
+    const baseSpin = 0.06 + Math.random() * 0.04;
+    const spinDirection = Math.random() < 0.5 ? -1 : 1; // -1 = clockwise, 1 = counter‑clockwise
+    this.swordRotationSpeed = baseSpin * spinDirection;
+
+    const tip = this.getSwordTip();
+    this.prevSwordTipX = tip.x;
+    this.prevSwordTipY = tip.y;
   }
 
   /** Whether this player is still alive (has life > 0) */
@@ -83,10 +96,17 @@ export class Player {
   }
 
   /** Update sword rotation and movement (called each frame) */
-  update(): void {
-    this.direction += this.swordRotationSpeed;
-    this.x += this.vx;
-    this.y += this.vy;
+  update(speedFactor: number = 1): void {
+    const f = speedFactor <= 0 ? 1 : speedFactor;
+
+    // Store previous sword tip for continuous collision checks
+    const prevTip = this.getSwordTip();
+    this.prevSwordTipX = prevTip.x;
+    this.prevSwordTipY = prevTip.y;
+
+    this.direction += this.swordRotationSpeed * f;
+    this.x += this.vx * f;
+    this.y += this.vy * f;
     if (this.hitCooldown > 0) {
       this.hitCooldown--;
     }

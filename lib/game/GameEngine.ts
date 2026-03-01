@@ -69,10 +69,13 @@ export class GameEngine {
         flagImage: c.flag,
         x: positions[i].x,
         y: positions[i].y,
-        swordLength: 40 + Math.random() * 15,
+        // Slightly longer knives for bigger bodies
+        swordLength: 55 + Math.random() * 20,
         swordDamage: (1.5 + Math.random() * 2) * this.damageMultiplier,
         moveSpeed,
       });
+      // Give each player an initial random movement direction once at start.
+      player.setRandomVelocity();
       this.players.push(player);
     });
   }
@@ -107,15 +110,14 @@ export class GameEngine {
   physicsUpdate(): void {
     this.frameCount++;
 
+    // When only a few players remain, dramatically speed up movement and sword spin.
+    const aliveCount = this.alivePlayers.length;
+    const speedFactor = aliveCount <= 5 ? 20 : 1;
+
     for (const player of this.players) {
       if (!player.isAlive) continue;
 
-      // Periodically change random velocity for wandering
-      if (this.frameCount % this.velocityChangeInterval === 0) {
-        player.setRandomVelocity();
-      }
-
-      player.update();
+      player.update(speedFactor);
       player.clampToArena(
         this.arenaMinX,
         this.arenaMinY,
@@ -128,6 +130,11 @@ export class GameEngine {
         this.arenaMaxX,
         this.arenaMaxY
       );
+
+      // Fade out hit flash effect over time
+      if (player.hitFlashFrames > 0) {
+        player.hitFlashFrames -= 1;
+      }
     }
   }
 
@@ -146,6 +153,8 @@ export class GameEngine {
           const dmg = attacker.swordDamage * damage;
           target.takeDamage(dmg);
           attacker.hitCooldown = this.hitCooldownFrames;
+          // Trigger a short visual flash on the struck player
+          target.hitFlashFrames = this.hitCooldownFrames;
         }
       }
     }

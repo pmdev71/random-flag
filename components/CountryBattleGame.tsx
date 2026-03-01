@@ -25,6 +25,18 @@ const ARENA_ASPECT = ARENA_WIDTH / ARENA_HEIGHT;
 // Difficulty presets
 type Difficulty = "easy" | "normal" | "hard";
 
+type PlayerView = {
+  id: string;
+  x: number;
+  y: number;
+  radius: number;
+  flag: string;
+  countryName: string;
+  life: number;
+  hitFlashFrames: number;
+  isAlive: boolean;
+};
+
 const DIFFICULTY_SETTINGS: Record<
   Difficulty,
   { speedMultiplier: number; damageMultiplier: number; hitCooldown: number }
@@ -43,22 +55,19 @@ function toCountryInput(): CountryInput[] {
   }));
 }
 
-/** Create hit sound using Web Audio API (no external lib) */
+/** Hit sound using public/sounds/knife-slice.wav */
+let knifeSliceAudio: HTMLAudioElement | null = null;
 function playHitSound(): void {
   try {
-    const ctx = new (window.AudioContext || (window as unknown as { webkitAudioContext: typeof AudioContext }).webkitAudioContext)();
-    const osc = ctx.createOscillator();
-    const gain = ctx.createGain();
-    osc.connect(gain);
-    gain.connect(ctx.destination);
-    osc.frequency.setValueAtTime(400, ctx.currentTime);
-    osc.frequency.exponentialRampToValueAtTime(100, ctx.currentTime + 0.05);
-    gain.gain.setValueAtTime(0.15, ctx.currentTime);
-    gain.gain.exponentialRampToValueAtTime(0.01, ctx.currentTime + 0.1);
-    osc.start(ctx.currentTime);
-    osc.stop(ctx.currentTime + 0.1);
+    if (!knifeSliceAudio) {
+      knifeSliceAudio = new Audio("/sounds/knife-slice.wav");
+    }
+    // Clone the audio so multiple hits can overlap slightly
+    const sound = knifeSliceAudio.cloneNode(true) as HTMLAudioElement;
+    sound.currentTime = 0;
+    void sound.play();
   } catch {
-    // Audio not supported
+    // Audio not supported or blocked
   }
 }
 
@@ -72,6 +81,7 @@ export function CountryBattleGame() {
   const [speed, setSpeed] = useState(1);
   const [soundEnabled, setSoundEnabled] = useState(true);
   const [settingsOpen, setSettingsOpen] = useState(false);
+  const [playerViews, setPlayerViews] = useState<PlayerView[]>([]);
 
   /** Start or restart game */
   const startGame = useCallback(() => {
@@ -115,6 +125,21 @@ export function CountryBattleGame() {
     // 1. Physics update
     // 2. Collision detection
     engine.tick();
+
+    // Sync lightweight snapshot for DOM overlay flags (for better emoji rendering on Windows)
+    setPlayerViews(
+      engine.playersList.map((p) => ({
+        id: p.id,
+        x: p.x,
+        y: p.y,
+        radius: p.radius,
+        flag: p.flagImage,
+        countryName: p.countryName,
+        life: p.life,
+        hitFlashFrames: p.hitFlashFrames,
+        isAlive: p.isAlive,
+      })),
+    );
 
     // Play hit sound when any player takes damage
     if (soundEnabled) {
@@ -162,9 +187,9 @@ export function CountryBattleGame() {
       const y = player.y;
       const r = player.radius;
 
-      // Health bar above player
-      const barWidth = r * 2.2;
-      const barHeight = 6;
+      // Health bar above player (scaled up with larger body)
+      const barWidth = r * 2.8;
+      const barHeight = 8;
       const barX = x - barWidth / 2;
       const barY = y - r - barHeight - 8;
 
@@ -176,41 +201,85 @@ export function CountryBattleGame() {
       ctx.lineWidth = 1;
       ctx.strokeRect(barX, barY, barWidth, barHeight);
 
-      // Player body (circle) with flag on body
+      // Player border around flag (flash orange briefly when hit)
       ctx.beginPath();
       ctx.arc(x, y, r, 0, Math.PI * 2);
-      ctx.fillStyle = "#2a2a38";
-      ctx.fill();
-      ctx.strokeStyle = "#4a4a5a";
-      ctx.lineWidth = 2;
+      ctx.strokeStyle = player.hitFlashFrames > 0 ? "#fb923c" : "#e5e7eb";
+      ctx.lineWidth = player.hitFlashFrames > 0 ? 3.4 : 2.6;
       ctx.stroke();
 
-      // Clip to circle and draw flag on body (inside the circle)
-      ctx.save();
-      ctx.beginPath();
-      ctx.arc(x, y, r - 2, 0, Math.PI * 2);
-      ctx.clip();
-      ctx.font = `${(r - 2) * 1.8}px "Segoe UI Emoji", "Apple Color Emoji", sans-serif`;
-      ctx.textAlign = "center";
-      ctx.textBaseline = "middle";
-      ctx.fillText(player.flagImage, x, y);
-      ctx.restore();
-
-      // Sword
+      // Sword / knife: real knife shape (handle + blade) instead of simple line
       const tip = player.getSwordTip();
+      const angle = player.direction;
+      const baseRadius = r + 6; // start knife just outside the body
+      const baseX = x + Math.cos(angle) * baseRadius;
+      const baseY = y + Math.sin(angle) * baseRadius;
+
+      // Direction perpendicular to blade for width
+      const nx = -Math.sin(angle);
+      const ny = Math.cos(angle);
+
+      const bladeLength = player.swordLength;
+      const bladeWidth = 9;
+      const tipX = baseX + Math.cos(angle) * bladeLength;
+      const tipY = baseY + Math.sin(angle) * bladeLength;
+
+      // Blade polygon (slight taper towards the tip)
+      const backLeftX = baseX + nx * bladeWidth;
+      const backLeftY = baseY + ny * bladeWidth;
+      const backRightX = baseX - nx * bladeWidth;
+      const backRightY = baseY - ny * bladeWidth;
+      const tipLeftX = tipX + nx * (bladeWidth * 0.4);
+      const tipLeftY = tipY + ny * (bladeWidth * 0.4);
+      const tipRightX = tipX - nx * (bladeWidth * 0.4);
+      const tipRightY = tipY - ny * (bladeWidth * 0.4);
+
+      // Blade fill (light steel)
       ctx.beginPath();
-      ctx.moveTo(x, y);
-      ctx.lineTo(tip.x, tip.y);
-      ctx.strokeStyle = "#6b7280";
-      ctx.lineWidth = 3;
-      ctx.stroke();
-      ctx.beginPath();
-      ctx.arc(tip.x, tip.y, 4, 0, Math.PI * 2);
-      ctx.fillStyle = "#9ca3af";
+      ctx.moveTo(backLeftX, backLeftY);
+      ctx.lineTo(tipLeftX, tipLeftY);
+      ctx.lineTo(tipRightX, tipRightY);
+      ctx.lineTo(backRightX, backRightY);
+      ctx.closePath();
+      ctx.fillStyle = "#e5e7eb";
       ctx.fill();
 
-      // Country name below
-      ctx.font = "12px system-ui, sans-serif";
+      // Blade edge (darker outline)
+      ctx.strokeStyle = "#4b5563";
+      ctx.lineWidth = 1.7;
+      ctx.stroke();
+
+      // Handle (short rounded rectangle inside the body side)
+      const handleLength = 18;
+      const handleWidth = 7;
+      const handleBaseX = x + Math.cos(angle) * (r - 6);
+      const handleBaseY = y + Math.sin(angle) * (r - 6);
+      const handleEndX = handleBaseX + Math.cos(angle) * handleLength;
+      const handleEndY = handleBaseY + Math.sin(angle) * handleLength;
+
+      const hBackLeftX = handleBaseX + nx * handleWidth;
+      const hBackLeftY = handleBaseY + ny * handleWidth;
+      const hBackRightX = handleBaseX - nx * handleWidth;
+      const hBackRightY = handleBaseY - ny * handleWidth;
+      const hFrontLeftX = handleEndX + nx * handleWidth;
+      const hFrontLeftY = handleEndY + ny * handleWidth;
+      const hFrontRightX = handleEndX - nx * handleWidth;
+      const hFrontRightY = handleEndY - ny * handleWidth;
+
+      ctx.beginPath();
+      ctx.moveTo(hBackLeftX, hBackLeftY);
+      ctx.lineTo(hFrontLeftX, hFrontLeftY);
+      ctx.lineTo(hFrontRightX, hFrontRightY);
+      ctx.lineTo(hBackRightX, hBackRightY);
+      ctx.closePath();
+      ctx.fillStyle = "#020617";
+      ctx.fill();
+      ctx.strokeStyle = "#000000";
+      ctx.lineWidth = 1.4;
+      ctx.stroke();
+
+      // Country name below (larger, to match bigger body)
+      ctx.font = "16px system-ui, -apple-system, BlinkMacSystemFont, sans-serif";
       ctx.fillStyle = "#e5e7eb";
       ctx.textAlign = "center";
       ctx.textBaseline = "top";
@@ -232,23 +301,51 @@ export function CountryBattleGame() {
 
   return (
     <div className="h-dvh sm:min-h-screen flex flex-col bg-zinc-950 w-full max-w-full overflow-x-hidden">
-      {/* Game section - top half on mobile (50vh), flexible on desktop */}
-      <div className="h-1/2 min-h-[180px] sm:h-auto sm:flex-1 sm:min-h-0 flex flex-col sm:gap-2 sm:p-4 p-2 pt-3 sm:items-center overflow-hidden">
+      {/* Game section - canvas keeps perfect aspect ratio so bodies stay round */}
+      <div className="flex-1 min-h-[180px] sm:min-h-0 flex flex-col sm:gap-2 sm:p-4 p-2 pt-3 sm:items-center overflow-hidden">
         <h1 className="text-base sm:text-2xl font-bold text-zinc-100 text-center shrink-0 mb-1 sm:mb-0">
           Country Sword Battle
         </h1>
 
-        {/* Canvas arena - fills game section */}
-        <div className="relative w-full flex-1 min-h-0 sm:max-w-[900px] sm:mx-auto rounded-lg border-2 border-zinc-700 overflow-hidden bg-zinc-900">
-          <div className="w-full h-full">
-            <canvas
-              ref={canvasRef}
-              width={ARENA_WIDTH}
-              height={ARENA_HEIGHT}
-              className="block w-full h-full object-contain"
-              style={{ background: "#0f0f14" }}
-            />
+        {/* Canvas arena - fixed aspect ratio (ARENA_WIDTH / ARENA_HEIGHT) so circles stay perfectly round */}
+        <div
+          className="relative w-full sm:max-w-[900px] sm:mx-auto rounded-lg border-2 border-zinc-700 overflow-hidden bg-zinc-900"
+          style={{ aspectRatio: ARENA_ASPECT }}
+        >
+          <canvas
+            ref={canvasRef}
+            width={ARENA_WIDTH}
+            height={ARENA_HEIGHT}
+            className="block w-full h-full"
+            style={{ background: "#0f0f14" }}
+          />
+
+          {/* DOM overlay for flags so emoji render like the main page (works on Windows too) */}
+          <div className="pointer-events-none absolute inset-0">
+            {playerViews
+              .filter((p) => p.isAlive)
+              .map((p) => {
+                const sizeW = (p.radius * 2 * 100) / ARENA_WIDTH;
+                const sizeH = (p.radius * 2 * 100) / ARENA_HEIGHT;
+                const left = ((p.x - p.radius) * 100) / ARENA_WIDTH;
+                const top = ((p.y - p.radius) * 100) / ARENA_HEIGHT;
+                return (
+                  <div
+                    key={p.id}
+                    className="absolute flex items-center justify-center rounded-full bg-black/90 text-white text-xl sm:text-2xl"
+                    style={{
+                      width: `${sizeW}%`,
+                      height: `${sizeH}%`,
+                      left: `${left}%`,
+                      top: `${top}%`,
+                    }}
+                  >
+                    <span className="leading-none">{p.flag}</span>
+                  </div>
+                );
+              })}
           </div>
+
           {/* Winner banner overlay */}
           {winner && (
             <div
@@ -300,7 +397,6 @@ export function CountryBattleGame() {
               value={difficulty}
               onChange={(e) => setDifficulty(e.target.value as Difficulty)}
               className="w-full bg-zinc-800 text-zinc-200 px-3 py-2 rounded-lg border border-zinc-600"
-              disabled={isPlaying}
             >
               <option value="easy">Easy</option>
               <option value="normal">Normal</option>
@@ -319,7 +415,6 @@ export function CountryBattleGame() {
               value={speed}
               onChange={(e) => setSpeed(Number(e.target.value))}
               className="w-full accent-emerald-500"
-              disabled={isPlaying}
             />
           </div>
           <label className="flex items-center gap-3 cursor-pointer">
